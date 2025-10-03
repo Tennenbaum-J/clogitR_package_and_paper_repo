@@ -1,10 +1,11 @@
 Package: clogitR
 Title: Conditional Logistic Regression
 Version: 0.0.0.9000
-Authors@R: 
+Authors@R: c(
     person("Jacob", "Tennenbaum", email = "Jacob.Tennenbaum51@qmail.cuny.edu", role = c("aut", "cre")),
     person("Bryan", "Nevarez", email = "Bryan.Nevarez@qc.cuny.edu", role = c("aut")),
     person("Adam", "Kapelner", email = "kapelner@qc.cuny.edu", role = c("aut"), comment = c(ORCID = "0000-0001-5985-6792"))
+    )
 Description: What the package does (one paragraph).
 License: `use_mit_license()`, `use_gpl3_license()` or friends to pick a
     license
@@ -15,8 +16,9 @@ Depends:
 	Rcpp (>= 1.0.14),
 	RcppEigen,
 	data.table
+LinkingTo: 
+	doParallel,	
+	RcppEigen,
+	Rcpp
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.2
-Collate:
-    'RcppExports.R'
-    'ConditionalLogisticRegression.R'

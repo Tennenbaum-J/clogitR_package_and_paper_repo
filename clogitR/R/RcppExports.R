@@ -2,10 +2,10 @@
 # Generator token: 10BE3573-1514-4C36-9D1C-5A225CD40393
 
 fast_conditional_logistic_regression_cpp <- function(X_diff, y_diff, max_iter = 100L, tol = 1e-8) {
-    .Call('_clogitR_fast_conditional_logistic_regression_cpp', PACKAGE = 'clogitR', X_diff, y_diff, max_iter, tol)
+    .Call(`_clogitR_fast_conditional_logistic_regression_cpp`, X_diff, y_diff, max_iter, tol)
 }
 
 fast_conditional_logistic_regression_with_var_cpp <- function(X_diff, y_diff, j = 1L, max_iter = 100L, tol = 1e-8) {
-    .Call('_clogitR_fast_conditional_logistic_regression_with_var_cpp', PACKAGE = 'clogitR', X_diff, y_diff, j, max_iter, tol)
+    .Call(`_clogitR_fast_conditional_logistic_regression_with_var_cpp`, X_diff, y_diff, j, max_iter, tol)
 }
 
