@@ -22,3 +22,9 @@ LinkingTo:
 	Rcpp
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.2
+Collate:
+    'RcppExports.R'
+    'clogitR.R'
+    'ConditionalLogisticRegressionClass.R'
+    'clogitRFunctions.R'
+    'zzz.R'

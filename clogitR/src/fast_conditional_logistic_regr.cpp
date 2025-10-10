@@ -77,7 +77,7 @@ List fast_conditional_logistic_regression_with_var_cpp(const Eigen::MatrixXd &X_
   if (j == -1){
     return List::create(
       _["b"] = beta,
-      _["ssq_b"] = I.solve().diagonal()
+      _["ssq_b"] = I.inverse().diagonal()
     );
   } else {
     return List::create(
