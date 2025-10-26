@@ -29,13 +29,13 @@ fit$summary()
 \section{Public fields}{
 \if{html}{\out{<div class="r6-fields">}}
 \describe{
-\item{\code{formula}}{The model formula supplied by the user.}
+\item{\code{response}}{Binary vector indicating the response of each subject.}
 
-\item{\code{data_name}}{The name of the dataset provided to the model.}
+\item{\code{strata}}{Numeric vector indexing the matched pairs and the reservoir.}
+
+\item{\code{treatment}}{Binary vector indicating weather a subject is test or control.}
 
 \item{\code{data}}{The dataset provided to the model.}
-
-\item{\code{model_frame}}{The model frame generated from the formula and data.}
 
 \item{\code{terms}}{Model terms object from the formula.}
 
@@ -47,9 +47,13 @@ fit$summary()
 
 \item{\code{y_reservoir_concordant}}{y values marked with 0 in the strata or where part of the concordat pairs.}
 
+\item{\code{treatment_reservoir_concordant}}{Treatment values marked with 0 in the strata or where part of the concordat pairs.}
+
 \item{\code{X_diffs_discordant}}{Difference of X rows in the strata. If treatment was indicated in the formula the difference is T - C.}
 
 \item{\code{y_diffs_discordant}}{Difference of y values in the strata. If treatment was indicated in the formula the difference is T - C.}
+
+\item{\code{treatment_diffs_discordant}}{Difference of treatment values in the strata. This should only ever be \code{NULL} or all 1's.}
 
 \item{\code{coefficients_and_variances}}{Table containing the coefficients and variances of each covariate.}
 
@@ -69,7 +73,7 @@ Initialize a new clogitRClass object}
 \itemize{
 \item \href{#method-clogitRClass-new}{\code{clogitRClass$new()}}
 \item \href{#method-clogitRClass-fit}{\code{clogitRClass$fit()}}
-\item \href{#method-clogitRClass-summary}{\code{clogitRClass$summary()}}
+\item \href{#method-clogitRClass-summary_data}{\code{clogitRClass$summary_data()}}
 \item \href{#method-clogitRClass-clone}{\code{clogitRClass$clone()}}
 }
 }
@@ -79,8 +83,10 @@ Initialize a new clogitRClass object}
 \subsection{Method \code{new()}}{
 \subsection{Usage}{
 \if{html}{\out{<div class="r">}}\preformatted{clogitRClass$new(
-  formula,
-  data,
+  response = NULL,
+  data = NULL,
+  treatment = NULL,
+  strata = NULL,
   use_concordant_pairs = TRUE,
   try_to_stableize = TRUE
 )}\if{html}{\out{</div>}}
@@ -89,9 +95,13 @@ Initialize a new clogitRClass object}
 \subsection{Arguments}{
 \if{html}{\out{<div class="arguments">}}
 \describe{
-\item{\code{formula}}{A formula specifying the model.}
+\item{\code{response}}{A binary (0,1) vector containing the response of each subject.}
 
-\item{\code{data}}{A data.frame or data.table containing the variables.}
+\item{\code{data}}{A data.frame, data.table, or model.matrix containing the variables.}
+
+\item{\code{treatment}}{A binary (0,1) vector containing weather each subject is treatment or control.}
+
+\item{\code{strata}}{Numeric vector indexing the matched pairs and the reservoir. Entrees indexed with zero, are added to the reservoir. Entrees indexed with the same number are part of the same strata.}
 
 \item{\code{use_concordant_pairs}}{Flag indicating whether to include the concordant pairs and reservoir in the model.}
 
@@ -116,12 +126,12 @@ Summarize the model
 
 }
 \if{html}{\out{<hr>}}
-\if{html}{\out{<a id="method-clogitRClass-summary"></a>}}
-\if{latex}{\out{\hypertarget{method-clogitRClass-summary}{}}}
-\subsection{Method \code{summary()}}{
+\if{html}{\out{<a id="method-clogitRClass-summary_data"></a>}}
+\if{latex}{\out{\hypertarget{method-clogitRClass-summary_data}{}}}
+\subsection{Method \code{summary_data()}}{
 Placeholder summary function.
 \subsection{Usage}{
-\if{html}{\out{<div class="r">}}\preformatted{clogitRClass$summary()}\if{html}{\out{</div>}}
+\if{html}{\out{<div class="r">}}\preformatted{clogitRClass$summary_data()}\if{html}{\out{</div>}}
 }
 
 }

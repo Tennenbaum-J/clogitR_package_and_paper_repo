@@ -1,4 +1,5 @@
-pacman::p_load(clogitR, dplyr, data.table, ggplot2, nbpMatching)
+#pacman::p_load(clogitR, dplyr, data.table, ggplot2, nbpMatching, survival)
+devtools::load_all("C:/Users/Jacob/clogitR_package_and_paper_repo/clogitR")
 rm(list = ls())
 options(error = recover)
 
@@ -22,16 +23,16 @@ all_betas_and_correlations = c(all_betas_and_correlations, list(list(p = 2, rho 
 all_betas_and_correlations = c(all_betas_and_correlations, list(list(p = 2, rho = 0.75,  betas = c(0.5, -2, 1, 0, 0))))
 all_betas_and_correlations = c(all_betas_and_correlations, list(list(p = 4, rho = 0,     betas = c(1, -2, 1, 1.5, -2))))
 all_betas_and_correlations = c(all_betas_and_correlations, list(list(p = 4, rho = 0.75,  betas = c(1, -2, 1, 1.5, -2))))
-all_betas_and_correlations = c(all_betas_and_correlations, list(list(p = 20, rho = 0,     betas = c(1, -2, 1, 1.5, -2,
-                                                                                                    0, 0, -1, -3, 2,
-                                                                                                    1, -2, 0, 1.4, 0,
-                                                                                                    -1.3, -2, 3, 1, 1
-))))
-all_betas_and_correlations = c(all_betas_and_correlations, list(list(p = 20, rho = 0.75,  betas = c(1, -2, 1, 1.5, -2,
-                                                                                                    0, 0, -1, -3, 2,
-                                                                                                    1, -2, 0, 1.4, 0,
-                                                                                                    -1.3, -2, 3, 1, 1
-))))
+# all_betas_and_correlations = c(all_betas_and_correlations, list(list(p = 20, rho = 0,     betas = c(1, -2, 1, 1.5, -2,
+#                                                                                                     0, 0, -1, -3, 2,
+#                                                                                                     1, -2, 0, 1.4, 0,
+#                                                                                                     -1.3, -2, 3, 1, 1
+# ))))
+# all_betas_and_correlations = c(all_betas_and_correlations, list(list(p = 20, rho = 0.75,  betas = c(1, -2, 1, 1.5, -2,
+#                                                                                                     0, 0, -1, -3, 2,
+#                                                                                                     1, -2, 0, 1.4, 0,
+#                                                                                                     -1.3, -2, 3, 1, 1
+# ))))
 
 # plots_list = list()
 # plot_index = 1
@@ -56,7 +57,6 @@ res = data.frame(
   beta_T = numeric(),
   n = numeric(),
   rho = numeric(),
-  design = character(),
   infrence = character(),
   beta_hat_T = numeric(),
   pval = numeric()
@@ -66,9 +66,10 @@ for (nsim in 1 : Nsim){
   start_time = Sys.time()
   cat ("nsim:", nsim, "/", Nsim, "\n")
   
-  #tryCatch({
+  tryCatch({
   for (beta_T in c(0,1)){
-    for (n in c(50, 100, 500, 1000)){ #50, 100, 500, 1000
+    for (n in c(500, 1000)){ #50, 100, 500, 1000
+      #beta_T = 0; n = 500; all_betas_and_correlation = all_betas_and_correlations[[1]]
       errors = rnorm(n, 0, sigma_e)
       for (all_betas_and_correlation in all_betas_and_correlations){
         probs = rep(NA, n)
@@ -116,7 +117,8 @@ for (nsim in 1 : Nsim){
         
         probs = 1 / (1 + exp(-(beta_T * w_t + as.numeric(unlist(z)) + errors)))
         y = rbinom(n, 1, probs)
-
+        
+        
         # df = data.frame(
         #   p = probs,
         #   y = y
@@ -131,58 +133,129 @@ for (nsim in 1 : Nsim){
         
         #test out model, clogit from survival, and simple glm
         
-        clogitR_model = clogitR(y ~ treatment(w_t) + X + strata(strat), use_concordant_pairs = TRUE, try_to_stableize = TRUE)
+        #clogitR_model = clogitR(response = y, data = X, treatment = w_t, strata = strat, use_concordant_pairs = TRUE, try_to_stableize = TRUE)
+        #clogit(y ~ w_t + . + strata(strat), data = X)
+        #clogitR_model$coefficients_and_variances
+        #summary(clogitR_model)
+        
+        matched_data =
+          process_matched_pairs(
+          strata = strat,
+          y = y,
+          X = data.matrix(X),
+          treatment = w_t
+        )
+        
+        reservoir_X =         matched_data$X_reservoir_concordant
+        reservoir_y =         matched_data$y_reservoir_concordant
+        reservoir_treatment = matched_data$treatment_reservoir_concordant
+        diffs_X =             matched_data$X_diffs_discordant
+        diffs_y =             matched_data$y_diffs_discordant
+        diffs_treatment =     matched_data$treatment_diffs_discordant
+        
+        mixed_model = 
+          fastClogit(discordant_Xdiffs = diffs_X,
+                   discordant_ydiffs = diffs_y,
+                   discordnat_Treatmentdiffs = diffs_treatment,
+                   concordnat_X = reservoir_X,
+                   concordnat_y = reservoir_y,
+                   concordnat_Treatment = reservoir_treatment)
+        m_beta_hat = mixed_model$mixed_betaT
+        ssq_m_beta_hat = mixed_model$mixed_ssq_b
+        m_z_stat = c(-1,1) * (m_beta_hat / sqrt(ssq_m_beta_hat))
+        m_prob = pnorm(m_z_stat)
+        m_pval = 2 * min(m_prob)
+        
+        d_beta_hat = mixed_model$discordnat_betaT
+        ssq_d_beta_hat = mixed_model$discordnat_ssq_b
+        d_z_stat = c(-1,1) * (d_beta_hat / sqrt(ssq_d_beta_hat))
+        d_prob = pnorm(d_z_stat)
+        d_pval = 2 * min(d_prob)
+        
+        c_beta_hat = mixed_model$concordnat_betaT
+        ssq_c_beta_hat = mixed_model$concordnat_betaT
+        c_z_stat = c(-1,1) * (c_beta_hat / sqrt(ssq_c_beta_hat))
+        c_prob = pnorm(c_z_stat)
+        c_pval = 2 * min(c_prob)
         
         
+        logit_model = 
+          fastClogit(discordant_Xdiffs = NULL,
+                     discordant_ydiffs = NULL,
+                     discordnat_Treatmentdiffs = NULL,
+                     concordnat_X = data.matrix(X),
+                     concordnat_y = y,
+                     concordnat_Treatment = w_t)
+        l_beta_hat = logit_model$concordnat_betaT
+        ssq_l_beta_hat = logit_model$concordnat_ssq_b
+        l_z_stat = c(-1,1) * (l_beta_hat / sqrt(ssq_l_beta_hat))
+        l_prob = pnorm(l_z_stat)
+        l_pval = 2 * min(l_prob)
         
-        matched_inference = SeqDesignInferenceIncidConditionalLogRegrKK$new(seq_des_obj, num_cores = 1, convex_flag = TRUE, verbose = FALSE)
-        mixed_inference = SeqDesignInferenceIncidConditionalLogRegrKK$new(seq_des_obj, num_cores = 1, convex_flag = FALSE, verbose = FALSE)
+
+        bayesian_model = 
+          bayesianClogit(discordant_Xdiffs = diffs_X,
+                     discordant_ydiffs = diffs_y,
+                     discordnat_Treatmentdiffs = diffs_treatment,
+                     concordnat_X = reservoir_X,
+                     concordnat_y = reservoir_y,
+                     concordnat_Treatment = reservoir_treatment)
+        b_beta_hat = bayesian_model$discordnat_betaT
+        ssq_b_beta_hat = bayesian_model$discordnat_ssq_b
+        b_z_stat = c(-1,1) * (b_beta_hat / sqrt(ssq_b_beta_hat))
+        b_prob = pnorm(b_z_stat)
+        b_pval = 2 * min(b_prob)
         
-        #cat("bata  : ", sprintf("%.3f", beta_T), ' ', sprintf("%.3f", betas[1]), ' ', sprintf("%.3f", betas[2]), '\n')
-        matched_beta_hat_T = matched_inference$compute_treatment_estimate()
-        matched_pval = matched_inference$compute_mle_two_sided_pval_for_treatment_effect()
-        
-        mixed_beta_hat_T = mixed_inference$compute_treatment_estimate()
-        mixed_pval = mixed_inference$compute_mle_two_sided_pval_for_treatment_effect()
-        #cat('\n')
-        
-        if(!is.null(matched_inference$get_graphing_data()$Rcpp_beta_hat_T)){
-          comparison = rbind(comparison, data.frame(
-            n = n,
-            beta_T = beta_T,
-            p = p,
-            num_discord = matched_inference$get_graphing_data()$num_discord,
-            Rcpp_beta_hat_T = matched_inference$get_graphing_data()$Rcpp_beta_hat_T,
-            Rcpp_sse_beta_T = matched_inference$get_graphing_data()$Rcpp_sse_beta_T,
-            clogit_beta_hat_T = matched_inference$get_graphing_data()$clogit_beta_hat_T,
-            clogit_sse_beta_T = matched_inference$get_graphing_data()$clogit_sse_beta_T,
-            glm_beta_hat_T = matched_inference$get_graphing_data()$glm_beta_hat_T,
-            glm_sse_beta_T = matched_inference$get_graphing_data()$glm_sse_beta_T,
-            swaped = matched_inference$get_graphing_data()$swaped
-          ))
-          to_few_discordant = c(to_few_discordant, 0)
-        } else {
-          to_few_discordant = c(to_few_discordant, 1)
-        }
+
         res = rbind(res, data.frame(
           betas = paste0(betas, collapse=""),
           beta_T = beta_T,
           n = n,
           rho = rho,
-          design = d,
-          infrence = "matched",
-          beta_hat_T = matched_beta_hat_T,
-          pval = matched_pval
-        ))
-        res = rbind(res, data.frame(
-          betas = paste0(betas, collapse=""),
-          beta_T = beta_T,
-          n = n,
-          rho = rho,
-          design = d,
           infrence = "mixed",
-          beta_hat_T = mixed_beta_hat_T,
-          pval = mixed_pval
+          beta_hat_T = m_beta_hat,
+          pval = m_pval
+        ))
+        
+        res = rbind(res, data.frame(
+          betas = paste0(betas, collapse=""),
+          beta_T = beta_T,
+          n = n,
+          rho = rho,
+          infrence = "discordant",
+          beta_hat_T = d_beta_hat,
+          pval = d_pval
+        ))
+        
+        res = rbind(res, data.frame(
+          betas = paste0(betas, collapse=""),
+          beta_T = beta_T,
+          n = n,
+          rho = rho,
+          infrence = "concordant",
+          beta_hat_T = c_beta_hat,
+          pval = c_pval
+        ))
+
+        res = rbind(res, data.frame(
+          betas = paste0(betas, collapse=""),
+          beta_T = beta_T,
+          n = n,
+          rho = rho,
+          infrence = "logit",
+          beta_hat_T = l_beta_hat,
+          pval = l_pval
+        ))
+        
+
+        res = rbind(res, data.frame(
+          betas = paste0(betas, collapse=""),
+          beta_T = beta_T,
+          n = n,
+          rho = rho,
+          infrence = "bayesian",
+          beta_hat_T = b_beta_hat,
+          pval = b_pval
         ))
         
       }
@@ -190,15 +263,19 @@ for (nsim in 1 : Nsim){
   }
   times[nsim] = Sys.time() - start_time
   print(Sys.time() - start_time)
-  # }, error = function(e) {
-  #   message(paste("⚠️ Error in nsim =", nsim, ":", conditionMessage(e)))
-  #   times[nsim] = NA  
-  # })
+  }, error = function(e) {
+    message(paste("⚠️ Error in nsim =", nsim, ":", conditionMessage(e)))
+    times[nsim] = NA
+  })
 }
 res_mod = res %>%
   mutate(sq_err = (beta_hat_T - beta_T)^2, rej = pval < 0.05) %>%
-  group_by(betas, rho, beta_T, n, design, infrence) %>%
-  summarize(mse = mean(sq_err), percent_reject = sum(rej) / n())
+  group_by(betas, rho, beta_T, n, infrence) %>%
+  summarize(
+    num_na = sum(is.na(pval)), 
+    mse = mean(sq_err, na.rm = TRUE),
+    percent_reject = sum(rej, na.rm = TRUE) / (n() - num_na),
+    .groups = "drop")
 
 
 pacman::p_load(microbenchmark)
@@ -252,5 +329,20 @@ ggplot(data = comparison, aes(x = Rcpp_sse_beta_T, y = clogit_sse_beta_T, colour
   geom_point() +
   xlim(0, 1e1) +
   ylim(0, 1e1)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 

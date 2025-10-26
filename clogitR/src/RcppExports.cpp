@@ -12,11 +12,10 @@ Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
 // fast_conditional_logistic_regression_cpp
-Eigen::VectorXd fast_conditional_logistic_regression_cpp(const Eigen::MatrixXd& X_diff, const Eigen::VectorXi& y_diff, int max_iter, double tol);
+List fast_conditional_logistic_regression_cpp(const Eigen::MatrixXd& X_diff, const Eigen::VectorXi& y_diff, int max_iter, double tol);
 RcppExport SEXP _clogitR_fast_conditional_logistic_regression_cpp(SEXP X_diffSEXP, SEXP y_diffSEXP, SEXP max_iterSEXP, SEXP tolSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< const Eigen::MatrixXd& >::type X_diff(X_diffSEXP);
     Rcpp::traits::input_parameter< const Eigen::VectorXi& >::type y_diff(y_diffSEXP);
     Rcpp::traits::input_parameter< int >::type max_iter(max_iterSEXP);
@@ -30,7 +29,6 @@ List fast_conditional_logistic_regression_with_var_cpp(const Eigen::MatrixXd& X_
 RcppExport SEXP _clogitR_fast_conditional_logistic_regression_with_var_cpp(SEXP X_diffSEXP, SEXP y_diffSEXP, SEXP jSEXP, SEXP max_iterSEXP, SEXP tolSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< const Eigen::MatrixXd& >::type X_diff(X_diffSEXP);
     Rcpp::traits::input_parameter< const Eigen::VectorXi& >::type y_diff(y_diffSEXP);
     Rcpp::traits::input_parameter< int >::type j(jSEXP);
@@ -40,10 +38,24 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// process_matched_pairs_cpp
+List process_matched_pairs_cpp(const Eigen::VectorXi& strata, const Eigen::VectorXd& y, const Eigen::MatrixXd& X, Nullable<Eigen::VectorXd> treatment);
+RcppExport SEXP _clogitR_process_matched_pairs_cpp(SEXP strataSEXP, SEXP ySEXP, SEXP XSEXP, SEXP treatmentSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< const Eigen::VectorXi& >::type strata(strataSEXP);
+    Rcpp::traits::input_parameter< const Eigen::VectorXd& >::type y(ySEXP);
+    Rcpp::traits::input_parameter< const Eigen::MatrixXd& >::type X(XSEXP);
+    Rcpp::traits::input_parameter< Nullable<Eigen::VectorXd> >::type treatment(treatmentSEXP);
+    rcpp_result_gen = Rcpp::wrap(process_matched_pairs_cpp(strata, y, X, treatment));
+    return rcpp_result_gen;
+END_RCPP
+}
 
 static const R_CallMethodDef CallEntries[] = {
     {"_clogitR_fast_conditional_logistic_regression_cpp", (DL_FUNC) &_clogitR_fast_conditional_logistic_regression_cpp, 4},
     {"_clogitR_fast_conditional_logistic_regression_with_var_cpp", (DL_FUNC) &_clogitR_fast_conditional_logistic_regression_with_var_cpp, 5},
+    {"_clogitR_process_matched_pairs_cpp", (DL_FUNC) &_clogitR_process_matched_pairs_cpp, 4},
     {NULL, NULL, 0}
 };
 

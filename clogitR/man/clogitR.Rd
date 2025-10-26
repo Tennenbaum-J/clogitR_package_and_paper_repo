@@ -7,12 +7,23 @@
 \title{\if{html}{\out{<div class="sourceCode">}}\preformatted{	Conditional Logistic Regression with Optional Concordant pairs 
 }\if{html}{\out{</div>}}}
 \usage{
-clogitR(formula, data, use_concordant_pairs = TRUE, try_to_stableize = TRUE)
+clogitR(
+  response = NULL,
+  data = NULL,
+  treatment = NULL,
+  strata = NULL,
+  use_concordant_pairs = TRUE,
+  try_to_stableize = TRUE
+)
 }
 \arguments{
-\item{formula}{A formula specifying the model.}
+\item{response}{A binary (0,1) vector containing the response of each subject. HI}
 
-\item{data}{A data.frame or data.table containing the variables.}
+\item{data}{A data.frame, data.table, or model.matrix containing the variables.}
+
+\item{treatment}{A binary (0,1) vector containing weather each subject is treatment or control.}
+
+\item{strata}{Numeric vector indexing the matched pairs and the reservoir. Entrees indexed with zero, are added to the reservoir. Entrees indexed with the same number are part of the same strata.}
 
 \item{use_concordant_pairs}{Flag indicating whether to include the concordant pairs and reservoir in the model.}
 

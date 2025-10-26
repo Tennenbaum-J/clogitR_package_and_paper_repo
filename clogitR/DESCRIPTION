@@ -11,15 +11,18 @@ License: `use_mit_license()`, `use_gpl3_license()` or friends to pick a
     license
 Encoding: UTF-8
 Depends:
-	R6,
-	checkmate,
-	Rcpp (>= 1.0.14),
-	RcppEigen,
-	data.table
-LinkingTo: 
-	doParallel,	
-	RcppEigen,
-	Rcpp
+    R (>= 4.0),
+    Rcpp (>= 1.0.14),
+    RcppEigen
+Imports:
+    R6,
+    checkmate,
+    data.table,
+    doParallel,
+    rstanarm
+LinkingTo:
+    Rcpp,
+    RcppEigen
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.2
 Collate:
@@ -27,4 +30,5 @@ Collate:
     'clogitR.R'
     'ConditionalLogisticRegressionClass.R'
     'clogitRFunctions.R'
+    'FastPairwiseClogit.R'
     'zzz.R'

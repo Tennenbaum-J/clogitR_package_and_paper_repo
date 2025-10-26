@@ -9,3 +9,7 @@ fast_conditional_logistic_regression_with_var_cpp <- function(X_diff, y_diff, j 
     .Call(`_clogitR_fast_conditional_logistic_regression_with_var_cpp`, X_diff, y_diff, j, max_iter, tol)
 }
 
+process_matched_pairs_cpp <- function(strata, y, X, treatment = NULL) {
+    .Call(`_clogitR_process_matched_pairs_cpp`, strata, y, X, treatment)
+}
+
