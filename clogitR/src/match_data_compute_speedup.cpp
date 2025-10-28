@@ -41,6 +41,8 @@ List process_matched_pairs_cpp(
   Eigen::MatrixXd diffs_X(max_strata, p); // at most max_strata discordant pairs
   Eigen::VectorXd diffs_y(max_strata);
   Eigen::VectorXd diffs_treat(has_treatment ? max_strata : 0);
+  std::vector<int> discordant_idx;
+  
   
   int res_idx = 0;
   int diff_idx = 0;
@@ -99,10 +101,14 @@ List process_matched_pairs_cpp(
     } else {
       // Discordant → compute diff (case - control)
       if (has_treatment && treat_vec[i] == 0) {
+        discordant_idx.push_back(j);
+        discordant_idx.push_back(i);
         diffs_X.row(diff_idx) = X.row(j) - X.row(i);
         diffs_y[diff_idx] = yj - yi;
         diffs_treat[diff_idx] = treat_vec[j] - treat_vec[i];
       } else {
+        discordant_idx.push_back(i);
+        discordant_idx.push_back(j);
         diffs_X.row(diff_idx) = X.row(i) - X.row(j);
         diffs_y[diff_idx] = yi - yj;
         if (has_treatment) {
@@ -124,7 +130,8 @@ List process_matched_pairs_cpp(
       _["y_diffs_discordant"] = R_NilValue,
       _["treatment_diffs_discordant"] = R_NilValue,
       _["dropped_discordant"] = true,
-      _["dropped_reservoir_concordant"] = false
+      _["dropped_reservoir_concordant"] = false,
+      _["discordant_idx"] = R_NilValue
     );
   }
   
@@ -155,6 +162,7 @@ List process_matched_pairs_cpp(
     _["y_diffs_discordant"] = diff_idx > 0 ? wrap(diffs_y) : R_NilValue,
     _["treatment_diffs_discordant"] = (has_treatment && diff_idx > 0) ? wrap(diffs_treat) : R_NilValue,
     _["dropped_discordant"] = false,
-    _["dropped_reservoir_concordant"] = dropped_reservoir
+    _["dropped_reservoir_concordant"] = dropped_reservoir,
+    _["discordant_idx"] = discordant_idx
   );
 }

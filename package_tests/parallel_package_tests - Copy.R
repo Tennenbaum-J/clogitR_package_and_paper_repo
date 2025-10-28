@@ -5,12 +5,12 @@ set.seed(1986)
 options(error = recover)
 
 nsim_exact_test = 501
-num_cores = availableCores()-1
+num_cores = availableCores()-10
 external_nsim = 10000
 Nsim = 500
 
 beta_Ts = c(0, 1)
-ns = c(100)
+ns = c(100, 250, 500)
 
 params = expand.grid(
   i = 1:Nsim,
@@ -21,6 +21,7 @@ params = params %>%
   arrange(i, beta_T, n) 
 
 run_simulation = function(i, beta_T, n){ 
+  #beta_T = 1; n = 100
   res = data.frame(
     n = numeric(),
     beta_T = numeric(),
@@ -40,7 +41,8 @@ run_simulation = function(i, beta_T, n){
   
   probs = 1 / (1 + exp(-(beta_0 + beta_x * X + beta_T * w)))
   y = rbinom(n, 1, probs)
-
+  # cbind(y, w)
+  
   matched_data =
     process_matched_pairs(
       strata = strat,
@@ -55,7 +57,33 @@ run_simulation = function(i, beta_T, n){
   diffs_X =             matched_data$X_diffs_discordant
   diffs_y =             matched_data$y_diffs_discordant
   diffs_treatment =     matched_data$treatment_diffs_discordant
-
+  discordant_idx =      matched_data$discordant_idx
+  
+  # summary(glm(y[discordant_idx] ~ w[discordant_idx] + X[discordant_idx], family = "binomial"))
+  # specil = 2 * y[discordant_idx] - 1
+  # 
+  # fast_conditional_logistic_regression_with_var_cpp(X_diff = cbind(1, w[discordant_idx], X[discordant_idx]), y_diff = specil, j = 2)
+  
+  discordant_no_diffs_model = 
+    fastClogit(discordant_Xdiffs = NULL,
+               discordant_ydiffs = NULL,
+               discordnat_Treatmentdiffs = NULL,
+               concordnat_X = cbind(1, X[discordant_idx]),
+               concordnat_y = y[discordant_idx],
+               concordnat_Treatment = w[discordant_idx])
+  dnd_beta_hat = discordant_no_diffs_model$concordnat_betaT
+  ssq_dnd_beta_hat = discordant_no_diffs_model$concordnat_ssq_b
+  dnd_z_stat = c(-1,1) * (dnd_beta_hat / sqrt(ssq_dnd_beta_hat))
+  dnd_prob = pnorm(dnd_z_stat)
+  dnd_pval = 2 * min(dnd_prob)
+  
+  fastClogit(discordant_Xdiffs = diffs_X,
+             discordant_ydiffs = diffs_y,
+             discordnat_Treatmentdiffs = diffs_treatment,
+             concordnat_X = NULL,
+             concordnat_y = NULL,
+             concordnat_Treatment = NULL)
+  
   mixed_model =
     fastClogit(discordant_Xdiffs = diffs_X,
                discordant_ydiffs = diffs_y,
@@ -107,6 +135,15 @@ run_simulation = function(i, beta_T, n){
   b_z_stat = c(-1,1) * (b_beta_hat / sqrt(ssq_b_beta_hat))
   b_prob = pnorm(b_z_stat)
   b_pval = 2 * min(b_prob)
+  
+  res = rbind(res, data.frame(
+    n = n,
+    beta_T = beta_T,
+    infrence = "discordant no diffs",
+    beta_hat_T = dnd_beta_hat,
+    ssq_hat_T = ssq_dnd_beta_hat,
+    pval = dnd_pval
+  ))
   
   res = rbind(res, data.frame(
     n = n,
@@ -165,61 +202,66 @@ handlers("txtprogressbar")
 registerDoFuture()
 plan(multisession, workers = num_cores)
 
+
 start_time = Sys.time()
-with_progress({
 
-  for (e_nsim in 1:external_nsim){
-    prog = progressor(along = 1:(nrow(params) * external_nsim))
-
-    results = foreach(row = iter(params, by = "row"), .combine = rbind, .packages = c("clogitR", "nbpMatching", "data.table", "dplyr", "MASS", "Rcpp")) %dorng% {
+for (e_nsim in 1:external_nsim){
+  with_progress({
+  
+    prog = progressor(along = 1:nrow(params))
+  
+    results = foreach(row = iter(params, by = "row"),
+                      .combine = rbind,
+                      .packages = c("clogitR", "nbpMatching", "data.table",
+                                    "dplyr", "MASS", "Rcpp")) %dorng% {
       i = row$i
       n = row$n
       beta_T = row$beta_T
-      cat(glue::glue("Running i={i}"), '\n')
+      
+      #cat(glue::glue("Running i={i}"), '\n')
       res = tryCatch({
         out = run_simulation(i, beta_T, n)
-        cat("Successfully ran simulation")
+        #cat("Successfully ran simulation")
         prog()
         out
       }, error = function(e) {
-        cat(glue::glue("Error in sim i={i}: {e$message}"), '\n')
+        #cat(glue::glue("Error in sim i={i}: {e$message}"), '\n')
         prog()  # still update progress bar even if it fails
         NULL    # return NULL if failed, will be dropped in rbind
       })
     }
-    write.csv(results, file = paste0("C:/temp/clogitR_kap_test/500_", e_nsim, ".csv"), row.names = FALSE)
-    rm(results); gc()
-  }
-})
-
-
+  })
+  write.csv(results, file = paste0("C:/temp/clogitR_kap_test_2/500_", e_nsim, ".csv"), row.names = FALSE)
+  rm(results); gc()
+}
 
 
 plan(sequential)
 end_time = Sys.time()
 
 
-results = read.csv("C:/temp/clogitR_kap_test/500_1.csv")
-for (i in 2:120){
-  results = rbind(results, read.csv(paste0("C:/temp/clogitR_kap_test/500_", i, ".csv")))
+results = read.csv("C:/temp/clogitR_kap_test_2/500_1.csv")
+for (i in 2:60){
+  results = rbind(results, read.csv(paste0("C:/temp/clogitR_kap_test_2/500_", i, ".csv")))
 }
 results$X = NULL
 
 res_mod = results %>%
   mutate(sq_err = (beta_hat_T - beta_T)^2, rej = pval < 0.05) %>%
-  group_by(beta_T, infrence) %>%
+  group_by(beta_T, infrence, n) %>%
   summarize(
     num_na = sum(is.na(pval)), 
     mse = mean(sq_err, na.rm = TRUE),
     percent_reject = sum(rej, na.rm = TRUE) / (n() - num_na),
     mean_betaT_hat = mean(beta_hat_T, na.rm = TRUE),
-    mean_ssq_betaT_hat = mean(ssq_hat_T, trim = 0.0001, na.rm = TRUE),
+    mean_sq_betaT_hat = mean(sqrt(ssq_hat_T), trim = 0.001, na.rm = TRUE),
     .groups = "drop")
 
 
-write.csv(res_mod, file = "C:/temp/clogitR_kap_test/combined_60000.csv", row.names = FALSE)
+write.csv(res_mod, file = "C:/Users/Jacob/clogitR_package_and_paper_repo/package_tests/results.csv", row.names = FALSE)
 
-
+summary(results[results$infrence == "discordant no diffs", "ssq_hat_T"])
+res_mod[res_mod$infrence %in% c("discordant no diffs", "discordant"), c("beta_T", "infrence", "percent_reject", "mean_betaT_hat", "mean_sq_betaT_hat")]
 
 results[(results$beta_T == 1) & 
           (results$betas == "0.5-2100") & 
@@ -228,7 +270,49 @@ results[(results$beta_T == 1) &
           (results$infrence == "matched"), ] |>
   (\(df) df[order(-df$beta_hat_T), ])()
 
+library(ggplot2)
 
+res_mod <- res_mod %>%
+  mutate(beta_T = factor(beta_T))
 
+# plot density distributions of mean_betaT_hat by inference type, faceted by beta_T
+ggplot(results, aes(x = beta_T, color = infrence, fill = infrence)) +
+  geom_histogram(alpha = 0.3) +
+  facet_wrap(~ beta_T + n, scales = "free") +
+  labs(
+    title = "Density of Mean Beta_T Hat by Inference Type",
+    x = expression(hat(beta)[T]),
+    y = "Density",
+    color = "Inference",
+    fill = "Inference"
+  ) +
+  theme_minimal()
 
+results_t = results[(results$infrence %in% c("discordant", "discordant no diffs")),]
+results_c = results[(results$infrence %in% c("bayesian", "logit")),]
 
+ggplot(results_t, aes(x = beta_hat_T, color = infrence, fill = infrence)) +
+  geom_histogram(aes(y = ..density..), bins = 30, alpha = 0.3, position = "identity", color = "black") +
+  facet_wrap(~ beta_T + n, scales = "free") +
+  labs(
+    title = "Normalized Histogram of Beta_Hat_T by Inference Type",
+    x = expression(hat(beta)[T]),
+    y = "Density",
+    color = "Inference",
+    fill = "Inference"
+  ) +
+  xlim(c(-3,3))
+  theme_minimal()
+
+  ggplot(results_c, aes(x = beta_hat_T, color = infrence, fill = infrence)) +
+    geom_histogram(aes(y = ..density..), bins = 30, alpha = 0.3, position = "identity", color = "black") +
+    facet_wrap(~ beta_T + n, scales = "free") +
+    labs(
+      title = "Normalized Histogram of Beta_Hat_T by Inference Type",
+      x = expression(hat(beta)[T]),
+      y = "Density",
+      color = "Inference",
+      fill = "Inference"
+    ) +
+    xlim(c(-3,3))
+  theme_minimal()
