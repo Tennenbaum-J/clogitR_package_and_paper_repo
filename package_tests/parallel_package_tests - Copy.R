@@ -258,7 +258,7 @@ res_mod = results %>%
     .groups = "drop")
 
 
-write.csv(res_mod, file = "C:/Users/Jacob/clogitR_package_and_paper_repo/package_tests/results.csv", row.names = FALSE)
+write.csv(results, file = "C:/Users/Jacob/clogitR_package_and_paper_repo/package_tests/results.csv", row.names = FALSE)
 
 summary(results[results$infrence == "discordant no diffs", "ssq_hat_T"])
 res_mod[res_mod$infrence %in% c("discordant no diffs", "discordant"), c("beta_T", "infrence", "percent_reject", "mean_betaT_hat", "mean_sq_betaT_hat")]
