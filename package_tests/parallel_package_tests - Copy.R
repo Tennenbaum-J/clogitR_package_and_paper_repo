@@ -1,4 +1,4 @@
-pacman::p_load(clogitR, dplyr, data.table, doFuture, future, doRNG, foreach, progressr, doParallel, nbpMatching, doParallel) #doParallel
+pacman::p_load(clogitR, dplyr, data.table, doFuture, future, doRNG, foreach, progressr, doParallel, nbpMatching, doParallel, ggplot2) #doParallel
 #devtools::load_all("C:/Users/Jacob/clogitR_package_and_paper_repo/clogitR")
 rm(list = ls())
 set.seed(1986)
@@ -11,20 +11,23 @@ Nsim = 500
 
 beta_Ts = c(0, 1)
 ns = c(100, 250, 500)
+match_on_mores = c(TRUE, FALSE)
 
 params = expand.grid(
   i = 1:Nsim,
   beta_T = beta_Ts,
-  n = ns
+  n = ns,
+  match_on_more = match_on_mores
 )
 params = params %>%
-  arrange(i, beta_T, n) 
+  arrange(i, beta_T, n, match_on_more) 
 
-run_simulation = function(i, beta_T, n){ 
-  #beta_T = 1; n = 100
+run_simulation = function(i, match_on_more, beta_T, n){ 
+  #beta_T = 1.5; n = 250; match_on_more= TRUE
   res = data.frame(
     n = numeric(),
     beta_T = numeric(),
+    match_on_more = logical(),
     inference = character(),
     beta_hat_T = numeric(),
     ssq_hat_T = numeric(),
@@ -33,15 +36,75 @@ run_simulation = function(i, beta_T, n){
 
   probs = rep(NA, n)
   y = rep(NA, n)
-  X = sort(rnorm(n, mean = 0.6, sd = 0.2))
-  w = rep(c(0, 1), times = n / 2)
-  strat = rep(1:(n/2), each = 2)
-  beta_0 = -1
-  beta_x = 1
   
-  probs = 1 / (1 + exp(-(beta_0 + beta_x * X + beta_T * w)))
-  y = rbinom(n, 1, probs)
-  # cbind(y, w)
+  if (match_on_more == FALSE) {
+    X = sort(rnorm(n, mean = 0.6, sd = 0.2))
+    w = rep(c(0, 1), times = n / 2)
+    strat = rep(1:(n/2), each = 2)
+    beta_0 = -1
+    beta_x = 1
+    
+    probs = 1 / (1 + exp(-(beta_0 + beta_x * X + beta_T * w)))
+    y = rbinom(n, 1, probs)
+  } else {
+    Sigma = 1 * (matrix(0.5, nrow = 6, ncol = 6) + diag(1 - 0.5, 6))
+    X = data.table(MASS::mvrnorm(n, rep(1, 6), Sigma))
+    X = matrix(runif(n * 6, -1, 1), ncol = 6)
+    df = data.frame(cbind(id = 1:n, X))
+    df.dist = gendistance(df[, -1], idcol = 1)
+    df.mdm = distancematrix(df.dist)
+    df.match = nonbimatch(df.mdm)
+    
+    T_inx = df.match$halves[,2]
+    C_ind = df.match$halves[,4]
+    X = X[c(rbind(T_inx, C_ind)), ]
+    strat = rep(1:(n/2), each = 2)
+    
+    Nsim = 10000
+    pval_x = matrix(NA, Nsim, 1)
+    pval_w_x = array(NA, Nsim)
+    pval_w = array(NA, Nsim)
+    
+    for (nsim in 1 : Nsim) {
+      w = c(rbind(replicate(n/2, sample(c(0, 1)), simplify = TRUE)))
+      beta_0 = -1
+      beta_x = c(3, 3, 3, 3, 3, 3)
+      probs = 1 / (1 + exp(-(beta_0 + (as.matrix(X) %*% beta_x) + beta_T * w)))
+      y = rbinom(n, 1, probs)
+      
+      obj = glm(y ~ data.matrix(X[,1]), family = "binomial")
+      pval_x[nsim,] = coef(summary(obj))[2,4]
+      obj = glm(y ~ w + data.matrix(X[,1]), family = "binomial")
+      pval_w_x[nsim] = coef(summary(obj))[2,4]
+      obj = glm(y ~ w, family = "binomial")
+      pval_w[nsim] = coef(summary(obj))[2,4]
+    }
+    
+    colMeans(pval_x < alpha)
+    mean(pval_w_x[!is.nan(pval_w_x)] < alpha)
+    mean(pval_w < alpha)
+    
+    w = c(rbind(replicate(n/2, sample(c(0, 1)), simplify = TRUE)))
+    beta_0 = -1
+    beta_x = c(1, 2, -2, -3, 3, 0)
+    probs = 1 / (1 + exp(-(beta_0 + (as.matrix(X) %*% beta_x) + beta_T * w)))
+    y = rbinom(n, 1, probs)
+    
+    df = data.frame(
+      p = probs,
+      y = y
+    )
+    
+    ggplot(df, aes(x = p, fill = factor(y))) +
+      geom_histogram(position = "identity", alpha = 0.6, bins = 30) +
+      labs(x = "Predicted probability", fill = "Outcome") +
+      scale_fill_manual(values = c("0" = "red", "1" = "blue")) +
+      theme_minimal()
+    
+    #drop the X to one col:
+    X = X[,1]
+  }
+  
   
   matched_data =
     process_matched_pairs(
@@ -59,10 +122,38 @@ run_simulation = function(i, beta_T, n){
   diffs_treatment =     matched_data$treatment_diffs_discordant
   discordant_idx =      matched_data$discordant_idx
   
-  # summary(glm(y[discordant_idx] ~ w[discordant_idx] + X[discordant_idx], family = "binomial"))
-  # specil = 2 * y[discordant_idx] - 1
+  
+  
+  
+  
+  # discordant_no_diffs_model_glm = summary(glm(y[discordant_idx] ~ w[discordant_idx] + X[discordant_idx], family = "binomial"))$coefficients[2,c(1,2)]
+  # dndg_beta_hat = discordant_no_diffs_model_glm[1]
+  # ssq_dndg_beta_hat = discordant_no_diffs_model_glm[2]^2
+  # dndg_pval = 2 * pnorm(min(c(-1,1) * (dndg_beta_hat / sqrt(ssq_dndg_beta_hat))))
   # 
-  # fast_conditional_logistic_regression_with_var_cpp(X_diff = cbind(1, w[discordant_idx], X[discordant_idx]), y_diff = specil, j = 2)
+  # res = rbind(res, data.frame(
+  #   n = n,
+  #   beta_T = beta_T,
+  #   infrence = "discordant no diffs glm",
+  #   beta_hat_T = dndg_beta_hat,
+  #   ssq_hat_T = ssq_dndg_beta_hat,
+  #   pval = dndg_pval
+  # ))
+  
+  discordant_no_diffs_model_glm_no_X = summary(glm(y[discordant_idx] ~ w[discordant_idx], family = "binomial"))$coefficients[2,c(1,2)]
+  dndgnX_beta_hat = discordant_no_diffs_model_glm_no_X[1]
+  ssq_dndgnX_beta_hat = discordant_no_diffs_model_glm_no_X[2]^2
+  dndgnX_pval = 2 * pnorm(min(c(-1,1) * (dndgnX_beta_hat / sqrt(ssq_dndgnX_beta_hat))))
+  
+  res = rbind(res, data.frame(
+    n = n,
+    beta_T = beta_T,
+    match_on_more = match_on_more,
+    infrence = "discordant no diffs glm no X",
+    beta_hat_T = dndgnX_beta_hat,
+    ssq_hat_T = ssq_dndgnX_beta_hat,
+    pval = dndgnX_pval
+  ))
   
   discordant_no_diffs_model = 
     fastClogit(discordant_Xdiffs = NULL,
@@ -73,16 +164,48 @@ run_simulation = function(i, beta_T, n){
                concordnat_Treatment = w[discordant_idx])
   dnd_beta_hat = discordant_no_diffs_model$concordnat_betaT
   ssq_dnd_beta_hat = discordant_no_diffs_model$concordnat_ssq_b
-  dnd_z_stat = c(-1,1) * (dnd_beta_hat / sqrt(ssq_dnd_beta_hat))
-  dnd_prob = pnorm(dnd_z_stat)
-  dnd_pval = 2 * min(dnd_prob)
+  dnd_pval = 2 * pnorm(min(c(-1,1) * (dnd_beta_hat / sqrt(ssq_dnd_beta_hat))))
   
-  fastClogit(discordant_Xdiffs = diffs_X,
-             discordant_ydiffs = diffs_y,
-             discordnat_Treatmentdiffs = diffs_treatment,
-             concordnat_X = NULL,
-             concordnat_y = NULL,
-             concordnat_Treatment = NULL)
+  res = rbind(res, data.frame(
+    n = n,
+    beta_T = beta_T,
+    match_on_more = match_on_more,
+    infrence = "discordant no diffs",
+    beta_hat_T = dnd_beta_hat,
+    ssq_hat_T = ssq_dnd_beta_hat,
+    pval = dnd_pval
+  ))
+  
+  # discordant_glm = summary(glm(diffs_y_0_1 ~ 0 + diffs_treatment + diffs_X, family = "binomial"))$coefficients[1,c(1,2)]
+  # dg_beta_hat = discordant_glm[1]
+  # ssq_dg_beta_hat = discordant_glm[2]^2
+  # dg_pval = 2 * pnorm(min(c(-1,1) * (dg_beta_hat / sqrt(ssq_dg_beta_hat))))
+  # 
+  # res = rbind(res, data.frame(
+  #   n = n,
+  #   beta_T = beta_T,
+  #   match_on_more = match_on_more,
+  #   infrence = "discordant glm",
+  #   beta_hat_T = dg_beta_hat,
+  #   ssq_hat_T = ssq_dg_beta_hat,
+  #   pval = dg_pval
+  # ))
+  
+  diffs_y_0_1 = as.numeric(diffs_y == 1)
+  discordant_glm_no_X = summary(glm(diffs_y_0_1 ~ 0 + diffs_treatment, family = "binomial"))$coefficients[1,c(1,2)]
+  dgnX_beta_hat = discordant_glm_no_X[1]
+  ssq_dgnX_beta_hat = discordant_glm_no_X[2]^2
+  dgnX_pval = 2 * pnorm(min(c(-1,1) * (dgnX_beta_hat / sqrt(ssq_dgnX_beta_hat))))
+  
+  res = rbind(res, data.frame(
+    n = n,
+    beta_T = beta_T,
+    match_on_more = match_on_more,
+    infrence = "discordant glm no X",
+    beta_hat_T = dgnX_beta_hat,
+    ssq_hat_T = ssq_dgnX_beta_hat,
+    pval = dgnX_pval
+  ))
   
   mixed_model =
     fastClogit(discordant_Xdiffs = diffs_X,
@@ -93,21 +216,44 @@ run_simulation = function(i, beta_T, n){
                concordnat_Treatment = reservoir_treatment)
   m_beta_hat = mixed_model$mixed_betaT
   ssq_m_beta_hat = mixed_model$mixed_ssq_b
-  m_z_stat = c(-1,1) * (m_beta_hat / sqrt(ssq_m_beta_hat))
-  m_prob = pnorm(m_z_stat)
-  m_pval = 2 * min(m_prob)
+  m_pval = 2 * pnorm(min(c(-1,1) * (m_beta_hat / sqrt(ssq_m_beta_hat))))
+  
+  res = rbind(res, data.frame(
+    n = n,
+    beta_T = beta_T,
+    match_on_more = match_on_more,
+    infrence = "mixed",
+    beta_hat_T = m_beta_hat,
+    ssq_hat_T = ssq_m_beta_hat,
+    pval = m_pval
+  ))
   
   d_beta_hat = mixed_model$discordnat_betaT
   ssq_d_beta_hat = mixed_model$discordnat_ssq_b
-  d_z_stat = c(-1,1) * (d_beta_hat / sqrt(ssq_d_beta_hat))
-  d_prob = pnorm(d_z_stat)
-  d_pval = 2 * min(d_prob)
+  d_pval = 2 * pnorm(min(c(-1,1) * (d_beta_hat / sqrt(ssq_d_beta_hat))))
   
-  c_beta_hat = mixed_model$concordnat_betaT
-  ssq_c_beta_hat = mixed_model$concordnat_ssq_b
-  c_z_stat = c(-1,1) * (c_beta_hat / sqrt(ssq_c_beta_hat))
-  c_prob = pnorm(c_z_stat)
-  c_pval = 2 * min(c_prob)
+  res = rbind(res, data.frame(
+    n = n,
+    beta_T = beta_T,
+    match_on_more = match_on_more,
+    infrence = "discordant",
+    beta_hat_T = d_beta_hat,
+    ssq_hat_T = ssq_d_beta_hat,
+    pval = d_pval
+  ))
+  
+  # c_beta_hat = mixed_model$concordnat_betaT
+  # ssq_c_beta_hat = mixed_model$concordnat_ssq_b
+  # c_pval = 2 * pnorm(min(c(-1,1) * (c_beta_hat / sqrt(ssq_c_beta_hat))))
+  # 
+  # res = rbind(res, data.frame(
+  #   n = n,
+  #   beta_T = beta_T,
+  #   infrence = "concordant",
+  #   beta_hat_T = c_beta_hat,
+  #   ssq_hat_T = ssq_c_beta_hat,
+  #   pval = c_pval
+  # ))
   
   logit_model = 
     fastClogit(discordant_Xdiffs = NULL,
@@ -118,10 +264,46 @@ run_simulation = function(i, beta_T, n){
                concordnat_Treatment = w)
   l_beta_hat = logit_model$concordnat_betaT
   ssq_l_beta_hat = logit_model$concordnat_ssq_b
-  l_z_stat = c(-1,1) * (l_beta_hat / sqrt(ssq_l_beta_hat))
-  l_prob = pnorm(l_z_stat)
-  l_pval = 2 * min(l_prob)
+  l_pval = 2 * pnorm(min(c(-1,1) * (l_beta_hat / sqrt(ssq_l_beta_hat))))
   
+  res = rbind(res, data.frame(
+    n = n,
+    beta_T = beta_T,
+    match_on_more = match_on_more,
+    infrence = "logit",
+    beta_hat_T = l_beta_hat,
+    ssq_hat_T = ssq_l_beta_hat,
+    pval = l_pval
+  ))
+  
+  # logit_model_glm = summary(glm(y ~ w + X, family = "binomial"))$coefficients[2,c(1,2)]
+  # lg_beta_hat = logit_model_glm[1]
+  # ssq_lg_beta_hat = logit_model_glm[2]^2
+  # lg_pval = 2 * pnorm(min(c(-1,1) * (lg_beta_hat / sqrt(ssq_lg_beta_hat))))
+  # 
+  # res = rbind(res, data.frame(
+  #   n = n,
+  #   beta_T = beta_T,
+  #   infrence = "logit glm",
+  #   beta_hat_T = lg_beta_hat,
+  #   ssq_hat_T = ssq_lg_beta_hat,
+  #   pval = lg_pval
+  # ))
+  
+  logit_model_glm_no_X = summary(glm(y ~ w, family = "binomial"))$coefficients[2,c(1,2)]
+  lgnX_beta_hat = logit_model_glm_no_X[1]
+  ssq_lgnX_beta_hat = logit_model_glm_no_X[2]^2
+  lgnX_pval = 2 * pnorm(min(c(-1,1) * (lgnX_beta_hat / sqrt(ssq_lgnX_beta_hat))))
+  
+  res = rbind(res, data.frame(
+    n = n,
+    beta_T = beta_T,
+    match_on_more = match_on_more,
+    infrence = "logit glm no X",
+    beta_hat_T = lgnX_beta_hat,
+    ssq_hat_T = ssq_lgnX_beta_hat,
+    pval = lgnX_pval
+  ))
   
   bayesian_model =
     bayesianClogit(discordant_Xdiffs = diffs_X,
@@ -132,64 +314,18 @@ run_simulation = function(i, beta_T, n){
                    concordnat_Treatment = reservoir_treatment)
   b_beta_hat = bayesian_model$discordnat_betaT
   ssq_b_beta_hat = bayesian_model$discordnat_ssq_b
-  b_z_stat = c(-1,1) * (b_beta_hat / sqrt(ssq_b_beta_hat))
-  b_prob = pnorm(b_z_stat)
-  b_pval = 2 * min(b_prob)
-  
-  res = rbind(res, data.frame(
-    n = n,
-    beta_T = beta_T,
-    infrence = "discordant no diffs",
-    beta_hat_T = dnd_beta_hat,
-    ssq_hat_T = ssq_dnd_beta_hat,
-    pval = dnd_pval
-  ))
-  
-  res = rbind(res, data.frame(
-    n = n,
-    beta_T = beta_T,
-    infrence = "mixed",
-    beta_hat_T = m_beta_hat,
-    ssq_hat_T = ssq_m_beta_hat,
-    pval = m_pval
-  ))
-  
-  res = rbind(res, data.frame(
-    n = n,
-    beta_T = beta_T,
-    infrence = "discordant",
-    beta_hat_T = d_beta_hat,
-    ssq_hat_T = ssq_d_beta_hat,
-    pval = d_pval
-  ))
-  
-  res = rbind(res, data.frame(
-    n = n,
-    beta_T = beta_T,
-    infrence = "concordant",
-    beta_hat_T = c_beta_hat,
-    ssq_hat_T = ssq_c_beta_hat,
-    pval = c_pval
-  ))
+  b_pval = 2 * pnorm(min(c(-1,1) * (b_beta_hat / sqrt(ssq_b_beta_hat))))
 
   res = rbind(res, data.frame(
     n = n,
     beta_T = beta_T,
-    infrence = "logit",
-    beta_hat_T = l_beta_hat,
-    ssq_hat_T = ssq_l_beta_hat,
-    pval = l_pval
-  ))
-
-
-  res = rbind(res, data.frame(
-    n = n,
-    beta_T = beta_T,
+    match_on_more = match_on_more,
     infrence = "bayesian",
     beta_hat_T = b_beta_hat,
     ssq_hat_T = ssq_b_beta_hat,
     pval = b_pval
   ))
+  
   
   return(res)
 }
@@ -215,12 +351,14 @@ for (e_nsim in 1:external_nsim){
                       .packages = c("clogitR", "nbpMatching", "data.table",
                                     "dplyr", "MASS", "Rcpp")) %dorng% {
       i = row$i
+      match_on_more = row$match_on_more
       n = row$n
       beta_T = row$beta_T
       
+      
       #cat(glue::glue("Running i={i}"), '\n')
       res = tryCatch({
-        out = run_simulation(i, beta_T, n)
+        out = run_simulation(i, match_on_more, beta_T, n)
         #cat("Successfully ran simulation")
         prog()
         out
@@ -231,7 +369,7 @@ for (e_nsim in 1:external_nsim){
       })
     }
   })
-  write.csv(results, file = paste0("C:/temp/clogitR_kap_test_2/500_", e_nsim, ".csv"), row.names = FALSE)
+  write.csv(results, file = paste0("C:/temp/clogitR_kap_test_4/500_", e_nsim, ".csv"), row.names = FALSE)
   rm(results); gc()
 }
 
@@ -240,15 +378,17 @@ plan(sequential)
 end_time = Sys.time()
 
 
-results = read.csv("C:/temp/clogitR_kap_test_2/500_1.csv")
-for (i in 2:60){
-  results = rbind(results, read.csv(paste0("C:/temp/clogitR_kap_test_2/500_", i, ".csv")))
+results = read.csv("C:/temp/clogitR_kap_test_4/500_1.csv")
+for (i in 2:475){
+  print(i)
+  results = rbind(results, read.csv(paste0("C:/temp/clogitR_kap_test_4/500_", i, ".csv")))
 }
+500 * i
 results$X = NULL
 
 res_mod = results %>%
   mutate(sq_err = (beta_hat_T - beta_T)^2, rej = pval < 0.05) %>%
-  group_by(beta_T, infrence, n) %>%
+  group_by(beta_T, match_on_more, infrence, n) %>%
   summarize(
     num_na = sum(is.na(pval)), 
     mse = mean(sq_err, na.rm = TRUE),
@@ -258,61 +398,106 @@ res_mod = results %>%
     .groups = "drop")
 
 
-write.csv(results, file = "C:/Users/Jacob/clogitR_package_and_paper_repo/package_tests/results.csv", row.names = FALSE)
+write.csv(res_mod, file = "C:/temp/clogitR_kap_test_4/combined_237500.csv", row.names = FALSE)
 
-summary(results[results$infrence == "discordant no diffs", "ssq_hat_T"])
-res_mod[res_mod$infrence %in% c("discordant no diffs", "discordant"), c("beta_T", "infrence", "percent_reject", "mean_betaT_hat", "mean_sq_betaT_hat")]
+  
+  
+  
+Sigma = 1 * (matrix(0.75, nrow = 6, ncol = 6) + diag(1 - 0.75, 6))
+X = data.table(MASS::mvrnorm(n, rep(1, 6), Sigma))
 
-results[(results$beta_T == 1) & 
-          (results$betas == "0.5-2100") & 
-          (results$rho == 0) & 
-          (results$n == 100) & 
-          (results$infrence == "matched"), ] |>
-  (\(df) df[order(-df$beta_hat_T), ])()
+df = data.frame(cbind(id = 1:n, X))
+df.dist = gendistance(df[, -1], idcol = 1)
+df.mdm = distancematrix(df.dist)
+df.match = nonbimatch(df.mdm)
 
-library(ggplot2)
+T_inx = df.match$halves[,2]
+w = as.numeric(1:n %in% T_inx)
 
-res_mod <- res_mod %>%
-  mutate(beta_T = factor(beta_T))
+strat = rep(0, n)
 
-# plot density distributions of mean_betaT_hat by inference type, faceted by beta_T
-ggplot(results, aes(x = beta_T, color = infrence, fill = infrence)) +
-  geom_histogram(alpha = 0.3) +
-  facet_wrap(~ beta_T + n, scales = "free") +
-  labs(
-    title = "Density of Mean Beta_T Hat by Inference Type",
-    x = expression(hat(beta)[T]),
-    y = "Density",
-    color = "Inference",
-    fill = "Inference"
-  ) +
+for(pair_idx in seq_len(nrow(df.match$halves))) {
+  strat[df.match$halves[pair_idx, 2]] = pair_idx
+  strat[df.match$halves[pair_idx, 4]] = pair_idx
+}
+beta_0 = -1
+beta_x = c(1, 2, -2, -3, 3, 0)
+probs = 1 / (1 + exp(-(beta_0 + (as.matrix(X) %*% beta_x) + beta_T * w)))
+y = rbinom(n, 1, probs)
+
+df = data.frame(
+  p = probs,
+  y = y
+)
+
+ggplot(df, aes(x = p, fill = factor(y))) +
+  geom_histogram(position = "identity", alpha = 0.6, bins = 30) +
+  labs(x = "Predicted probability", fill = "Outcome") +
+  scale_fill_manual(values = c("0" = "red", "1" = "blue")) +
   theme_minimal()
 
-results_t = results[(results$infrence %in% c("discordant", "discordant no diffs")),]
-results_c = results[(results$infrence %in% c("bayesian", "logit")),]
+#drop the X to one col:
+X = X[,1]
+  
+  
+  
+pacman::p_load(fastLogisticRegressionWrap)
 
-ggplot(results_t, aes(x = beta_hat_T, color = infrence, fill = infrence)) +
-  geom_histogram(aes(y = ..density..), bins = 30, alpha = 0.3, position = "identity", color = "black") +
-  facet_wrap(~ beta_T + n, scales = "free") +
-  labs(
-    title = "Normalized Histogram of Beta_Hat_T by Inference Type",
-    x = expression(hat(beta)[T]),
-    y = "Density",
-    color = "Inference",
-    fill = "Inference"
-  ) +
-  xlim(c(-3,3))
-  theme_minimal()
+n = 100
+p = 4
+alpha = 0.05
 
-  ggplot(results_c, aes(x = beta_hat_T, color = infrence, fill = infrence)) +
-    geom_histogram(aes(y = ..density..), bins = 30, alpha = 0.3, position = "identity", color = "black") +
-    facet_wrap(~ beta_T + n, scales = "free") +
-    labs(
-      title = "Normalized Histogram of Beta_Hat_T by Inference Type",
-      x = expression(hat(beta)[T]),
-      y = "Density",
-      color = "Inference",
-      fill = "Inference"
-    ) +
-    xlim(c(-3,3))
+x = runif(n * p, -1, 1)
+if (p == 1){
+  x = sort(x)
+}
+X = cbind(1, matrix(x, ncol = p))
+beta_x_vec = rep(3, p)
+beta_0 = -1
+beta_0_plus_beta_x_times_x = X %*% c(beta_0, beta_x_vec)
+beta_T = 0.75
+logit = function(x){1 / (1 + exp(-x))}
+
+Nsim = 10000
+num_disc = array(NA, Nsim)
+pval_x = matrix(NA, Nsim, p)
+pval_w_x = array(NA, Nsim)
+pval_w = array(NA, Nsim)
+for (nsim in 1 : Nsim){
+  w = if (p == 1){
+    rep(sample(c(0, 1)), times = n / 2)
+  } else {
+    sample(c(rep(0, n / 2), rep(1, n / 2)))
+  }
+  
+  prob_y_eq_one = logit(beta_0_plus_beta_x_times_x + beta_T * w)
+  y = rbinom(n, 1, prob_y_eq_one)
+  
+  obj = fast_logistic_regression(X, y,           do_inference_on_var = "all")
+  pval_x[nsim, ] = obj$approx_pval[-1]
+  obj = fast_logistic_regression(cbind(X, w), y, do_inference_on_var = p + 2)
+  pval_w_x[nsim] = obj$approx_pval[p + 2]
+  obj = fast_logistic_regression(cbind(1, w), y, do_inference_on_var = 2)
+  pval_w[nsim] = obj$approx_pval[2]
+  # y_and_w = matrix(y, nrow = n/2, byrow = TRUE)
+  # num_disc[nsim] = sum(rowSums(y_and_w) == 1)
+}
+# cbind(y_and_w, matrix(p, nrow = n/2, byrow = TRUE))
+# summary(pval_x)
+# summary(pval_w_x)
+# summary(pval_w)
+colMeans(pval_x < alpha)
+mean(pval_w_x[!is.nan(pval_w_x)] < alpha)
+mean(pval_w < alpha)
+
+df = data.frame(
+  p = prob_y_eq_one,
+  y = y
+)
+
+ggplot(df, aes(x = p, fill = factor(y))) +
+  geom_histogram(position = "identity", alpha = 0.6, bins = 30) +
+  labs(x = "Predicted probability", fill = "Outcome") +
+  scale_fill_manual(values = c("0" = "red", "1" = "blue")) +
   theme_minimal()
+  
