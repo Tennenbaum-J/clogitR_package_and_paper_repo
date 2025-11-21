@@ -12,7 +12,6 @@ Nsim = 100
 
 beta_Ts = c(0, 1)
 ns = c(100, 250, 500, 1000)
-settings = c("No X, Match")
 match_on_mores = c("only one", "corelated linear", "corelated non-linear", "not coralated linear", "not coralated non-linear")
 regress_on_Xs = c("all", "one", "none")
 
