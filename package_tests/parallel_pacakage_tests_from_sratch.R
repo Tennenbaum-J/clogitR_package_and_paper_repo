@@ -32,16 +32,17 @@ Bayesian_Clogit = function(y_dis, X_dis, w_dis, y_con, X_con, w_con, inculde_pri
   
   if (inculde_prior_for_beta_T) {
     prior_means = concordant_model[-1,1]
-    prior_cov_no_intercept = min(concordant_model[-1,2], 20)
+    prior_cov_no_intercept = pmin(concordant_model[-1,2], 20)
   } else {
     prior_means = c(0, concordant_model[-c(1,2),1])
-    prior_cov_no_intercept = min(c(20, concordant_model[-c(1,2),2]), 20)
+    prior_cov_no_intercept = pmin(c(20, concordant_model[-c(1,2),2]), 20)
   }
   
-  if (sum(prior_cov_no_intercept) == 20 * length(prior_cov_no_intercept)) {
+  if (all(prior_cov_no_intercept == 20)) {
     ret = list()
     ret$betaT = NA
     ret$ssq_beta_T = NA
+    ret$pval = NA
     return(ret)#model blew up
   }
   
@@ -61,9 +62,13 @@ Bayesian_Clogit = function(y_dis, X_dis, w_dis, y_con, X_con, w_con, inculde_pri
   
   ret = list()
   if (!is.null(discordant_model)){
-    ret$betaT = unname(coef(discordant_model)[1])
-    posterior_draws = as.matrix(discordant_model)
-    ret$ssq_beta_T = var(posterior_draws[, 1])
+    post = as.matrix(discordant_model)
+    coef_name = grep("^w_dis", colnames(post), value = TRUE)
+    w_samples = post[, coef_name]
+    
+    ret$betaT = mean(w_samples)
+    ret$ssq_beta_T = sd(w_samples)
+    ret$pval = 2 * min(mean(w_samples > 0), mean(w_samples < 0))
   }
   
   return(ret)
@@ -120,24 +125,24 @@ Do_Inference = function(y, X, w, strat, beta_T, n, X_style, true_funtion, regres
       pval = pval
     ))
     
-    ########################### DISCORDANT  ########################### 
-    beta_hat_T = NA; ssq_beta_hat_T = NA; pval = NA
-    if (discordant_viabele) {
-      model = summary(glm(y[dis_idx] ~ w[dis_idx] + X[dis_idx,], family = "binomial"))$coefficients[2,c(1,2)]
-      beta_hat_T = model[1]; ssq_beta_hat_T = model[2]
-      pval = 2 * pnorm(min(c(-1,1) * (beta_hat_T / ssq_beta_hat_T)))
-    }
-    res = rbind(res, data.frame(
-      n = n,
-      beta_T = beta_T,
-      X_style = X_style,
-      true_funtion = true_funtion,
-      regress_on_X = regress_on_X,
-      inference = "discordant",
-      beta_hat_T = beta_hat_T,
-      ssq_beta_hat_T = ssq_beta_hat_T,
-      pval = pval
-    ))
+    # ########################### DISCORDANT  ########################### 
+    # beta_hat_T = NA; ssq_beta_hat_T = NA; pval = NA
+    # if (discordant_viabele) {
+    #   model = summary(glm(y[dis_idx] ~ w[dis_idx] + X[dis_idx,], family = "binomial"))$coefficients[2,c(1,2)]
+    #   beta_hat_T = model[1]; ssq_beta_hat_T = model[2]
+    #   pval = 2 * pnorm(min(c(-1,1) * (beta_hat_T / ssq_beta_hat_T)))
+    # }
+    # res = rbind(res, data.frame(
+    #   n = n,
+    #   beta_T = beta_T,
+    #   X_style = X_style,
+    #   true_funtion = true_funtion,
+    #   regress_on_X = regress_on_X,
+    #   inference = "discordant",
+    #   beta_hat_T = beta_hat_T,
+    #   ssq_beta_hat_T = ssq_beta_hat_T,
+    #   pval = pval
+    # ))
     
     ########################### LOGIT  ########################### 
     beta_hat_T = NA; ssq_beta_hat_T = NA; pval = NA
@@ -159,11 +164,12 @@ Do_Inference = function(y, X, w, strat, beta_T, n, X_style, true_funtion, regres
     ))
     
     ########################### BAYESIAN NO T PRIOR ########################### 
-    beta_hat_T = NA; ssq_beta_hat_T = NA; pval = NA
+    beta_hat_T = NA; ssq_beta_hat_T = NA; pval = NA; pval_freq = NA
     if (discordant_viabele & concordant_viabele) {
       model = Bayesian_Clogit(y_dis, X_dis, w_dis, y_con, X_con, w_con, FALSE)
       beta_hat_T = model$betaT; ssq_beta_hat_T = model$ssq_beta_T 
-      pval = 2 * pnorm(min(c(-1,1) * (beta_hat_T / ssq_beta_hat_T)))
+      pval = model$pval
+      pval_freq = 2 * pnorm(min(c(-1,1) * (beta_hat_T / ssq_beta_hat_T)))
     }
     res = rbind(res, data.frame(
       n = n,
@@ -176,13 +182,25 @@ Do_Inference = function(y, X, w, strat, beta_T, n, X_style, true_funtion, regres
       ssq_beta_hat_T = ssq_beta_hat_T,
       pval = pval
     ))
+    res = rbind(res, data.frame(
+      n = n,
+      beta_T = beta_T,
+      X_style = X_style,
+      true_funtion = true_funtion,
+      regress_on_X = regress_on_X,
+      inference = "bayesian no T prior pavl-freq",
+      beta_hat_T = beta_hat_T,
+      ssq_beta_hat_T = ssq_beta_hat_T,
+      pval = pval_freq
+    ))
     
     ########################### BAYESIAN ########################### 
-    beta_hat_T = NA; ssq_beta_hat_T = NA; pval = NA
+    beta_hat_T = NA; ssq_beta_hat_T = NA; pval = NA; pval_freq = NA
     if (discordant_viabele & concordant_viabele) {
       model = Bayesian_Clogit(y_dis, X_dis, w_dis, y_con, X_con, w_con, TRUE)
       beta_hat_T = model$betaT; ssq_beta_hat_T = model$ssq_beta_T 
-      pval = 2 * pnorm(min(c(-1,1) * (beta_hat_T / ssq_beta_hat_T)))
+      pval = model$pval
+      pval_freq = 2 * pnorm(min(c(-1,1) * (beta_hat_T / ssq_beta_hat_T)))
     }
     res = rbind(res, data.frame(
       n = n,
@@ -196,57 +214,18 @@ Do_Inference = function(y, X, w, strat, beta_T, n, X_style, true_funtion, regres
       pval = pval
     ))
     
-    ########################### MIXED ########################### 
-    beta_hat_T = NA; ssq_beta_hat_T = NA; pval = NA
-    if (length(y_dis) == 0) {
-      X_temp = X_con; y_temp = y_con; w_temp = w_con
-    } else {
-      y_dis_0_1 = ifelse(y_dis == 1, 1, 0)
-      X_temp = rbind(X_dis, X_con); y_temp = c(y_dis_0_1, y_con); w_temp = c(w_dis, w_con)
-    }
-    if (TRUE) {
-      model = summary(glm(y_temp ~ w_temp + X_temp, family = "binomial"))$coefficients[2,c(1,2)]
-      beta_hat_T = model[1]; ssq_beta_hat_T = model[2]
-      pval = 2 * pnorm(min(c(-1,1) * (beta_hat_T / ssq_beta_hat_T)))
-    }
     res = rbind(res, data.frame(
       n = n,
       beta_T = beta_T,
       X_style = X_style,
       true_funtion = true_funtion,
       regress_on_X = regress_on_X,
-      inference = "mixed",
+      inference = "bayesian pavl-freq",
       beta_hat_T = beta_hat_T,
       ssq_beta_hat_T = ssq_beta_hat_T,
-      pval = pval
+      pval = pval_freq
     ))
-    rm(X_temp, y_dis_0_1, y_temp, w_temp)
     
-    ########################### MIXED x2 ########################### 
-    beta_hat_T = NA; ssq_beta_hat_T = NA; pval = NA
-    if (length(y_dis) == 0) {
-      X_temp = X_con; y_temp = y_con; w_temp = w_con
-    } else {
-      y_dis_0_1 = ifelse(y_dis == 1, 1, 0)
-      X_temp = rbind(X_dis, X_dis, X_con); y_temp = c(y_dis_0_1, y_dis_0_1, y_con); w_temp = c(w_dis, w_dis, w_con)
-    }
-    if (TRUE) {
-      model = summary(glm(y_temp ~ w_temp + X_temp, family = "binomial"))$coefficients[2,c(1,2)]
-      beta_hat_T = model[1]; ssq_beta_hat_T = model[2]
-      pval = 2 * pnorm(min(c(-1,1) * (beta_hat_T / ssq_beta_hat_T)))
-    }
-    res = rbind(res, data.frame(
-      n = n,
-      beta_T = beta_T,
-      X_style = X_style,
-      true_funtion = true_funtion,
-      regress_on_X = regress_on_X,
-      inference = "mixed x2",
-      beta_hat_T = beta_hat_T,
-      ssq_beta_hat_T = ssq_beta_hat_T,
-      pval = pval
-    ))
-    rm(X_temp, y_dis_0_1, y_temp, w_temp)
   } else { #if no x then remove the x parameter
     discordant_viabele = if(length(y_dis) > 5) { TRUE } else { FALSE }
     
@@ -270,24 +249,24 @@ Do_Inference = function(y, X, w, strat, beta_T, n, X_style, true_funtion, regres
       pval = pval
     ))
     
-    ########################### DISCORDANT  ########################### 
-    beta_hat_T = NA; ssq_beta_hat_T = NA; pval = NA
-    if (discordant_viabele) {
-      model = summary(glm(y[dis_idx] ~ w[dis_idx], family = "binomial"))$coefficients[2,c(1,2)]
-      beta_hat_T = model[1]; ssq_beta_hat_T = model[2]
-      pval = 2 * pnorm(min(c(-1,1) * (beta_hat_T / ssq_beta_hat_T)))
-    }
-    res = rbind(res, data.frame(
-      n = n,
-      beta_T = beta_T,
-      X_style = X_style,
-      true_funtion = true_funtion,
-      regress_on_X = regress_on_X,
-      inference = "discordant",
-      beta_hat_T = beta_hat_T,
-      ssq_beta_hat_T = ssq_beta_hat_T,
-      pval = pval
-    ))
+    # ########################### DISCORDANT  ########################### 
+    # beta_hat_T = NA; ssq_beta_hat_T = NA; pval = NA
+    # if (discordant_viabele) {
+    #   model = summary(glm(y[dis_idx] ~ w[dis_idx], family = "binomial"))$coefficients[2,c(1,2)]
+    #   beta_hat_T = model[1]; ssq_beta_hat_T = model[2]
+    #   pval = 2 * pnorm(min(c(-1,1) * (beta_hat_T / ssq_beta_hat_T)))
+    # }
+    # res = rbind(res, data.frame(
+    #   n = n,
+    #   beta_T = beta_T,
+    #   X_style = X_style,
+    #   true_funtion = true_funtion,
+    #   regress_on_X = regress_on_X,
+    #   inference = "discordant",
+    #   beta_hat_T = beta_hat_T,
+    #   ssq_beta_hat_T = ssq_beta_hat_T,
+    #   pval = pval
+    # ))
     
     ########################### LOGIT  ########################### 
     beta_hat_T = NA; ssq_beta_hat_T = NA; pval = NA
@@ -308,57 +287,6 @@ Do_Inference = function(y, X, w, strat, beta_T, n, X_style, true_funtion, regres
       pval = pval
     ))
     
-    ########################### MIXED ########################### 
-    beta_hat_T = NA; ssq_beta_hat_T = NA; pval = NA
-    if (length(y_dis) == 0) {
-      y_temp = y_con; w_temp = w_con
-    } else {
-      y_dis_0_1 = ifelse(y_dis == 1, 1, 0)
-      y_temp = c(y_dis_0_1, y_con); w_temp = c(w_dis, w_con)
-    }
-    if (TRUE) {
-      model = summary(glm(y_temp ~ w_temp, family = "binomial"))$coefficients[2,c(1,2)]
-      beta_hat_T = model[1]; ssq_beta_hat_T = model[2]
-      pval = 2 * pnorm(min(c(-1,1) * (beta_hat_T / ssq_beta_hat_T)))
-    }
-    res = rbind(res, data.frame(
-      n = n,
-      beta_T = beta_T,
-      X_style = X_style,
-      true_funtion = true_funtion,
-      regress_on_X = regress_on_X,
-      inference = "mixed",
-      beta_hat_T = beta_hat_T,
-      ssq_beta_hat_T = ssq_beta_hat_T,
-      pval = pval
-    ))
-    rm(y_temp, w_temp)
-    
-    ########################### MIXED x2 ########################### 
-    beta_hat_T = NA; ssq_beta_hat_T = NA; pval = NA
-    if (length(y_dis) == 0) {
-      y_temp = y_con; w_temp = w_con
-    } else {
-      y_dis_0_1 = ifelse(y_dis == 1, 1, 0)
-      y_temp = c(y_dis_0_1, y_dis_0_1, y_con); w_temp = c(w_dis, w_dis, w_con)
-    }
-    if (TRUE) {
-      model = summary(glm(y_temp ~ w_temp, family = "binomial"))$coefficients[2,c(1,2)]
-      beta_hat_T = model[1]; ssq_beta_hat_T = model[2]
-      pval = 2 * pnorm(min(c(-1,1) * (beta_hat_T / ssq_beta_hat_T)))
-    }
-    res = rbind(res, data.frame(
-      n = n,
-      beta_T = beta_T,
-      X_style = X_style,
-      true_funtion = true_funtion,
-      regress_on_X = regress_on_X,
-      inference = "mixed x2",
-      beta_hat_T = beta_hat_T,
-      ssq_beta_hat_T = ssq_beta_hat_T,
-      pval = pval
-    ))
-    rm(y_temp, w_temp)
   }
   
   rownames(res) = NULL
@@ -510,5 +438,5 @@ res_mod = results %>%
     .groups = "drop")
 
 
-write.csv(res_mod, file = "C:/temp/clogitR_kap_test_from_scratch/combined_14000.csv", row.names = FALSE)
+write.csv(res_mod, file = "C:/temp/clogitR_kap_test_from_scratch/combined_13000.csv", row.names = FALSE)
 
