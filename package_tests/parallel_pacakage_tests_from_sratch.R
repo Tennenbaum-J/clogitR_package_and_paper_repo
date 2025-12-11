@@ -1,9 +1,9 @@
-pacman::p_load(clogitR, dplyr, data.table, doFuture, future, doRNG, foreach, progressr, doParallel, nbpMatching, doParallel, ggplot2) #doParallel
+pacman::p_load(clogitR, dplyr, data.table, doFuture, future, doRNG, foreach, progressr, doParallel, nbpMatching, doParallel, ggplot2, geepack, glmmTMB) #doParallel
 options(error = recover)
 rm(list = ls())
 ############### parameters ###############
 num_cores = availableCores() - 4
-Nsim = 1000
+Nsim = 100
 external_nsim = 100000
 ns = c(100, 250, 500)
 beta_Ts = c(0,1)
@@ -169,38 +169,7 @@ Do_Inference = function(y, X, w, strat, beta_T, n, X_style, true_funtion, regres
       model = Bayesian_Clogit(y_dis, X_dis, w_dis, y_con, X_con, w_con, FALSE)
       beta_hat_T = model$betaT; ssq_beta_hat_T = model$ssq_beta_T 
       pval = model$pval
-      pval_freq = 2 * pnorm(min(c(-1,1) * (beta_hat_T / ssq_beta_hat_T)))
-    }
-    res = rbind(res, data.frame(
-      n = n,
-      beta_T = beta_T,
-      X_style = X_style,
-      true_funtion = true_funtion,
-      regress_on_X = regress_on_X,
-      inference = "bayesian no T prior",
-      beta_hat_T = beta_hat_T,
-      ssq_beta_hat_T = ssq_beta_hat_T,
-      pval = pval
-    ))
-    res = rbind(res, data.frame(
-      n = n,
-      beta_T = beta_T,
-      X_style = X_style,
-      true_funtion = true_funtion,
-      regress_on_X = regress_on_X,
-      inference = "bayesian no T prior pavl-freq",
-      beta_hat_T = beta_hat_T,
-      ssq_beta_hat_T = ssq_beta_hat_T,
-      pval = pval_freq
-    ))
-    
-    ########################### BAYESIAN ########################### 
-    beta_hat_T = NA; ssq_beta_hat_T = NA; pval = NA; pval_freq = NA
-    if (discordant_viabele & concordant_viabele) {
-      model = Bayesian_Clogit(y_dis, X_dis, w_dis, y_con, X_con, w_con, TRUE)
-      beta_hat_T = model$betaT; ssq_beta_hat_T = model$ssq_beta_T 
-      pval = model$pval
-      pval_freq = 2 * pnorm(min(c(-1,1) * (beta_hat_T / ssq_beta_hat_T)))
+      #pval_freq = 2 * pnorm(min(c(-1,1) * (beta_hat_T / ssq_beta_hat_T)))
     }
     res = rbind(res, data.frame(
       n = n,
@@ -213,17 +182,102 @@ Do_Inference = function(y, X, w, strat, beta_T, n, X_style, true_funtion, regres
       ssq_beta_hat_T = ssq_beta_hat_T,
       pval = pval
     ))
+    # res = rbind(res, data.frame(
+    #   n = n,
+    #   beta_T = beta_T,
+    #   X_style = X_style,
+    #   true_funtion = true_funtion,
+    #   regress_on_X = regress_on_X,
+    #   inference = "bayesian no T prior pavl-freq",
+    #   beta_hat_T = beta_hat_T,
+    #   ssq_beta_hat_T = ssq_beta_hat_T,
+    #   pval = pval_freq
+    # ))
     
+    # ########################### BAYESIAN ########################### 
+    # beta_hat_T = NA; ssq_beta_hat_T = NA; pval = NA; pval_freq = NA
+    # if (discordant_viabele & concordant_viabele) {
+    #   model = Bayesian_Clogit(y_dis, X_dis, w_dis, y_con, X_con, w_con, TRUE)
+    #   beta_hat_T = model$betaT; ssq_beta_hat_T = model$ssq_beta_T 
+    #   pval = model$pval
+    #   #pval_freq = 2 * pnorm(min(c(-1,1) * (beta_hat_T / ssq_beta_hat_T)))
+    # }
+    # res = rbind(res, data.frame(
+    #   n = n,
+    #   beta_T = beta_T,
+    #   X_style = X_style,
+    #   true_funtion = true_funtion,
+    #   regress_on_X = regress_on_X,
+    #   inference = "bayesian",
+    #   beta_hat_T = beta_hat_T,
+    #   ssq_beta_hat_T = ssq_beta_hat_T,
+    #   pval = pval
+    # ))
+    # 
+    # # res = rbind(res, data.frame(
+    # #   n = n,
+    # #   beta_T = beta_T,
+    # #   X_style = X_style,
+    # #   true_funtion = true_funtion,
+    # #   regress_on_X = regress_on_X,
+    # #   inference = "bayesian pavl-freq",
+    # #   beta_hat_T = beta_hat_T,
+    # #   ssq_beta_hat_T = ssq_beta_hat_T,
+    # #   pval = pval_freq
+    # # ))
+    
+    ########################### glmmTMB  ########################### 
+    beta_hat_T = NA; ssq_beta_hat_T = NA; pval = NA
+    tryCatch({
+      fit_tmb = glmmTMB(
+        y ~ X + w + (1 | strat),
+        family = binomial(),
+        data   = data.frame(y, X, w, strat)
+      )
+      model = summary(fit_tmb)$coefficients$cond["w", c("Estimate", "Std. Error")]
+      beta_hat_T = model[1]; ssq_beta_hat_T = model[2]
+      pval = 2 * pnorm(min(c(-1,1) * (beta_hat_T / ssq_beta_hat_T)))
+    }, error = function(e) {
+      beta_hat_T <<- NA; ssq_beta_hat_T <<- NA; pval <<- NA
+    })
     res = rbind(res, data.frame(
       n = n,
       beta_T = beta_T,
       X_style = X_style,
       true_funtion = true_funtion,
       regress_on_X = regress_on_X,
-      inference = "bayesian pavl-freq",
+      inference = "glmmTMB",
       beta_hat_T = beta_hat_T,
       ssq_beta_hat_T = ssq_beta_hat_T,
-      pval = pval_freq
+      pval = pval
+    ))
+    
+    ########################### GEE  ########################### 
+    beta_hat_T = NA; ssq_beta_hat_T = NA; pval = NA
+    tryCatch({
+      fit_gee = geeglm(
+        y ~ X + w,
+        id    = strat,
+        family = binomial(link = "logit"),
+        corstr = "exchangeable",
+        data   = data.frame(y, X, w, strat)
+      )
+      model = summary(fit_gee)$coefficients["w", c("Estimate", "Std.err")]
+      beta_hat_T = as.numeric(model[1]); ssq_beta_hat_T = as.numeric(model[2])
+      pval = 2 * pnorm(min(c(-1,1) * (beta_hat_T / ssq_beta_hat_T)))
+    }, error = function(e) {
+      beta_hat_T <<- NA; ssq_beta_hat_T <<- NA; pval <<- NA
+    })
+    res = rbind(res, data.frame(
+      n = n,
+      beta_T = beta_T,
+      X_style = X_style,
+      true_funtion = true_funtion,
+      regress_on_X = regress_on_X,
+      inference = "GEE",
+      beta_hat_T = beta_hat_T,
+      ssq_beta_hat_T = ssq_beta_hat_T,
+      pval = pval
     ))
     
   } else { #if no x then remove the x parameter
@@ -320,7 +374,7 @@ Run_sim = function(beta_T, n, X_style) {
   
   for (true_funtion in true_funtions) {
     if (true_funtion == "linear") {
-      beta_X = c(3, 3, 3, 3, 3, 3)
+      beta_X = c(1, 1, 1, 1, 1, 1)
       beta_0 = -1
       probs = 1 / (1 + exp(-(beta_0 + (as.matrix(X) %*% beta_X) + beta_T * w)))
     } else {
@@ -427,7 +481,7 @@ results$X = NULL
 
 res_mod = results %>%
   mutate(sq_err = (beta_hat_T - beta_T)^2, rej = pval < 0.05) %>%
-  group_by(beta_T, true_funtion, regress_on_X, n, inference) %>%
+  group_by(beta_T, true_funtion, regress_on_X, n, inference, X_style) %>%
   summarize(
     num_na = sum(is.na(pval)), 
     num_real = sum(!is.na(pval)),
@@ -438,5 +492,5 @@ res_mod = results %>%
     .groups = "drop")
 
 
-write.csv(res_mod, file = "C:/temp/clogitR_kap_test_from_scratch/combined_13000.csv", row.names = FALSE)
+write.csv(res_mod, file = "C:/temp/clogitR_kap_test_from_scratch/combined_17100.csv", row.names = FALSE)
 
