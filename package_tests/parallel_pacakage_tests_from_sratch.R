@@ -1,9 +1,9 @@
-pacman::p_load(clogitR, dplyr, data.table, doFuture, future, doRNG, foreach, progressr, doParallel, nbpMatching, doParallel, ggplot2, geepack, glmmTMB) #doParallel
+pacman::p_load(clogitR, dplyr, data.table, doFuture, future, doRNG, foreach, progressr, doParallel, nbpMatching, doParallel, ggplot2, geepack, glmmTMB, rstan) #doParallel
 options(error = recover)
 rm(list = ls())
 ############### parameters ###############
-num_cores = availableCores() - 4
-Nsim = 100
+num_cores = availableCores() - 19
+Nsim = 10
 external_nsim = 100000
 ns = c(100, 250, 500)
 beta_Ts = c(0,1)
@@ -27,48 +27,69 @@ params = params %>%
 ############### CODE ###############
 
 Bayesian_Clogit = function(y_dis, X_dis, w_dis, y_con, X_con, w_con, inculde_prior_for_beta_T) {
-  concordant_model = summary(glm(y_con ~ w_con + X_con, family = "binomial"))$coefficients[,c(1,2)]
-  
+  fit_con = glm(y_con ~ w_con + X_con, family = "binomial")
+  b_con = summary(fit_con)$coefficients[,1]
+  Sigma_con = pmin(vcov(fit_con), 20)
+  eps = 1e-6         #added for stabilibty
+  Sigma_con = Sigma_con + diag(eps, nrow(Sigma_con))
   
   if (inculde_prior_for_beta_T) {
-    prior_means = concordant_model[-1,1]
-    prior_cov_no_intercept = pmin(concordant_model[-1,2], 20)
+    b_con = b_con[-1]
+    Sigma_con = Sigma_con[-1,-1]
   } else {
-    prior_means = c(0, concordant_model[-c(1,2),1])
-    prior_cov_no_intercept = pmin(c(20, concordant_model[-c(1,2),2]), 20)
+    b_con = c(0, b_con[-c(1,2)])
+    Sigma_con = Sigma_con[-1,-1]; Sigma_con[1,] = 0; Sigma_con[, 1] = 0; Sigma_con[1,1] = 20
   }
   
-  if (all(prior_cov_no_intercept == 20)) {
+  if (all(diag(Sigma_con) == 20)) {
     ret = list()
     ret$betaT = NA
     ret$ssq_beta_T = NA
+    ret$reject = NA
     ret$pval = NA
     return(ret)#model blew up
   }
   
   y_dis_0_1 = ifelse(y_dis == -1, 0, 1)
+  X_dis = cbind(w_dis, X_dis)
+  
+  data_list = list(
+    N = nrow(X_dis),
+    K = ncol(X_dis),
+    X = X_dis,
+    y = y_dis_0_1,
+    mu = b_con,        # example prior mean
+    Sigma = Sigma_con    # example covariance (wide prior)
+  )
+  
   discordant_model = tryCatch({
-    rstanarm::stan_glm(
-      y_dis_0_1 ~ 0 + w_dis + X_dis,
-      family = binomial(link = "logit"),
-      prior = rstanarm::normal(location = prior_means, scale = prior_cov_no_intercept),
-      data = data.frame(y_dis_0_1, w_dis, X_dis),
-      refresh = 0
-    )
+    #for other aphas you would need to get the posterior for treatment effect and take the quarantines of that. you can get that from: post <- rstan::extract(fit); w_samples <- post$beta[, 1]
+    summary(stan(file = "mvn_logistic.stan", data = data_list, refresh = 0))$summary[1, c("mean", "sd", "2.5%", "97.5%")]
+    
+    # rstanarm::stan_glm(
+    #   y_dis_0_1 ~ 0 + w_dis + X_dis,
+    #   family = binomial(link = "logit"),
+    #   prior = rstanarm::normal(location = prior_means, scale = prior_cov_no_intercept),
+    #   data = data.frame(y_dis_0_1, w_dis, X_dis),
+    #   refresh = 0
+    # )
   }, error = function(e) {
     warning(sprintf("stan_glm failed: %s", e$message))
     NULL
   })
   
-  ret = list()
-  if (!is.null(discordant_model)){
-    post = as.matrix(discordant_model)
-    coef_name = grep("^w_dis", colnames(post), value = TRUE)
-    w_samples = post[, coef_name]
-    
-    ret$betaT = mean(w_samples)
-    ret$ssq_beta_T = sd(w_samples)
-    ret$pval = 2 * min(mean(w_samples > 0), mean(w_samples < 0))
+  ret = list(
+    betaT = NA,
+    ssq_beta_T = NA,
+    reject = NA,
+    pval = NA
+  )
+  
+  if (!is.null(discordant_model)) {
+    ret$betaT = discordant_model[1]
+    ret$ssq_beta_T = discordant_model[2]
+    ret$reject = !(discordant_model[3] < 0 & discordant_model[4] > 0)
+    ret$pval = if (ret$reject) 0 else 1
   }
   
   return(ret)
@@ -341,6 +362,60 @@ Do_Inference = function(y, X, w, strat, beta_T, n, X_style, true_funtion, regres
       pval = pval
     ))
     
+    ########################### glmmTMB  ########################### 
+    beta_hat_T = NA; ssq_beta_hat_T = NA; pval = NA
+    tryCatch({
+      fit_tmb = glmmTMB(
+        y ~ w + (1 | strat),
+        family = binomial(),
+        data   = data.frame(y, X, w, strat)
+      )
+      model = summary(fit_tmb)$coefficients$cond["w", c("Estimate", "Std. Error")]
+      beta_hat_T = model[1]; ssq_beta_hat_T = model[2]
+      pval = 2 * pnorm(min(c(-1,1) * (beta_hat_T / ssq_beta_hat_T)))
+    }, error = function(e) {
+      beta_hat_T <<- NA; ssq_beta_hat_T <<- NA; pval <<- NA
+    })
+    res = rbind(res, data.frame(
+      n = n,
+      beta_T = beta_T,
+      X_style = X_style,
+      true_funtion = true_funtion,
+      regress_on_X = regress_on_X,
+      inference = "glmmTMB",
+      beta_hat_T = beta_hat_T,
+      ssq_beta_hat_T = ssq_beta_hat_T,
+      pval = pval
+    ))
+    
+    ########################### GEE  ########################### 
+    beta_hat_T = NA; ssq_beta_hat_T = NA; pval = NA
+    tryCatch({
+      fit_gee = geeglm(
+        y ~ w,
+        id    = strat,
+        family = binomial(link = "logit"),
+        corstr = "exchangeable",
+        data   = data.frame(y, X, w, strat)
+      )
+      model = summary(fit_gee)$coefficients["w", c("Estimate", "Std.err")]
+      beta_hat_T = as.numeric(model[1]); ssq_beta_hat_T = as.numeric(model[2])
+      pval = 2 * pnorm(min(c(-1,1) * (beta_hat_T / ssq_beta_hat_T)))
+    }, error = function(e) {
+      beta_hat_T <<- NA; ssq_beta_hat_T <<- NA; pval <<- NA
+    })
+    res = rbind(res, data.frame(
+      n = n,
+      beta_T = beta_T,
+      X_style = X_style,
+      true_funtion = true_funtion,
+      regress_on_X = regress_on_X,
+      inference = "GEE",
+      beta_hat_T = beta_hat_T,
+      ssq_beta_hat_T = ssq_beta_hat_T,
+      pval = pval
+    ))
+    
   }
   
   rownames(res) = NULL
@@ -421,7 +496,7 @@ plan(multisession, workers = num_cores)
 
 ############### SIM ###############
 
-for (e_nsim in 1:external_nsim) {
+for (e_nsim in 2:external_nsim) {
 
   with_progress({
     prog = progressor(along = 1:nrow(params))
@@ -448,7 +523,7 @@ for (e_nsim in 1:external_nsim) {
       })
     }
   })
-  write.csv(results, file = paste0("C:/temp/clogitR_kap_test_from_scratch/1000_", e_nsim, ".csv"), row.names = FALSE)
+  write.csv(results, file = paste0("C:/temp/clogitR_kap_test_from_scratch/10_", e_nsim, ".csv"), row.names = FALSE)
   rm(results); gc()
 }
 
@@ -461,7 +536,7 @@ results = read.csv("C:/temp/clogitR_kap_test_from_scratch/1000_1.csv")
 
 sum = 1
 for (i in 2:475) {
-  file_path <- paste0("C:/temp/clogitR_kap_test_from_scratch/1000_", i, ".csv")
+  file_path <- paste0("C:/temp/clogitR_kap_test_from_scratch/10_", i, ".csv")
   if (file.exists(file_path)) {
     sum = sum +1
     message("Reading file ", i)
@@ -492,5 +567,5 @@ res_mod = results %>%
     .groups = "drop")
 
 
-write.csv(res_mod, file = "C:/temp/clogitR_kap_test_from_scratch/combined_17100.csv", row.names = FALSE)
+write.csv(res_mod, file = "C:/temp/clogitR_kap_test_from_scratch/combined_160.csv", row.names = FALSE)
 
