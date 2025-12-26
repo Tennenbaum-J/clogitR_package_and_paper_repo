@@ -2,8 +2,8 @@ pacman::p_load(clogitR, dplyr, data.table, doFuture, future, doRNG, foreach, pro
 options(error = recover)
 rm(list = ls())
 ############### parameters ###############
-num_cores = availableCores() - 19
-Nsim = 10
+num_cores = availableCores() - 1
+Nsim = 100
 external_nsim = 100000
 ns = c(100, 250, 500)
 beta_Ts = c(0,1)
@@ -12,7 +12,9 @@ true_funtions = c("linear", "non-linear")
 regress_on_Xs = c("all", "one", "none")
 
 #Bayesian_prior_for_betaTs = c(TRUE, FALSE)
-
+sm = rstan::stan_model("mvn_logistic.stan")
+sm_g = rstan::stan_model("mvn_logistic_gprior.stan")
+sm_PMP = rstan::stan_model("mvn_logistic_PMP.stan")
 
 params = expand.grid(
   nsim = 1:Nsim,
@@ -26,57 +28,102 @@ params = params %>%
 
 ############### CODE ###############
 
-Bayesian_Clogit = function(y_dis, X_dis, w_dis, y_con, X_con, w_con, inculde_prior_for_beta_T) {
+Bayesian_Clogit = function(y_dis, X_dis, w_dis, y_con, X_con, w_con, prior_type) {
   fit_con = glm(y_con ~ w_con + X_con, family = "binomial")
   b_con = summary(fit_con)$coefficients[,1]
   Sigma_con = pmin(vcov(fit_con), 20)
   eps = 1e-6         #added for stabilibty
   Sigma_con = Sigma_con + diag(eps, nrow(Sigma_con))
   
-  if (inculde_prior_for_beta_T) {
-    b_con = b_con[-1]
-    Sigma_con = Sigma_con[-1,-1]
-  } else {
-    b_con = c(0, b_con[-c(1,2)])
-    Sigma_con = Sigma_con[-1,-1]; Sigma_con[1,] = 0; Sigma_con[, 1] = 0; Sigma_con[1,1] = 20
-  }
-  
-  if (all(diag(Sigma_con) == 20)) {
-    ret = list()
-    ret$betaT = NA
-    ret$ssq_beta_T = NA
-    ret$reject = NA
-    ret$pval = NA
-    return(ret)#model blew up
-  }
+  b_con = c(0, b_con[-c(1,2)])
+  Sigma_con = Sigma_con[-1,-1]; Sigma_con[1,] = 0; Sigma_con[, 1] = 0; Sigma_con[1,1] = 20
   
   y_dis_0_1 = ifelse(y_dis == -1, 0, 1)
-  X_dis = cbind(w_dis, X_dis)
+  wX_dis = cbind(w_dis, X_dis)
   
-  data_list = list(
-    N = nrow(X_dis),
-    K = ncol(X_dis),
-    X = X_dis,
-    y = y_dis_0_1,
-    mu = b_con,        # example prior mean
-    Sigma = Sigma_con    # example covariance (wide prior)
-  )
-  
-  discordant_model = tryCatch({
-    #for other aphas you would need to get the posterior for treatment effect and take the quarantines of that. you can get that from: post <- rstan::extract(fit); w_samples <- post$beta[, 1]
-    summary(stan(file = "mvn_logistic.stan", data = data_list, refresh = 0))$summary[1, c("mean", "sd", "2.5%", "97.5%")]
+  if (prior_type == "normal") {
     
-    # rstanarm::stan_glm(
-    #   y_dis_0_1 ~ 0 + w_dis + X_dis,
-    #   family = binomial(link = "logit"),
-    #   prior = rstanarm::normal(location = prior_means, scale = prior_cov_no_intercept),
-    #   data = data.frame(y_dis_0_1, w_dis, X_dis),
-    #   refresh = 0
-    # )
-  }, error = function(e) {
-    warning(sprintf("stan_glm failed: %s", e$message))
-    NULL
-  })
+    if (all(diag(Sigma_con) == 20)) {
+      ret = list()
+      ret$betaT = NA
+      ret$ssq_beta_T = NA
+      ret$reject = NA
+      ret$pval = NA
+      return(ret)#model blew up
+    }
+    
+    data_list = list(
+      N = nrow(wX_dis),
+      K = ncol(wX_dis),
+      X = wX_dis,
+      y = y_dis_0_1,
+      mu = b_con,        # example prior mean
+      Sigma = Sigma_con    # example covariance (wide prior)
+    )
+    
+    discordant_model = tryCatch({
+      #for other aphas you would need to get the posterior for treatment effect and take the quarantines of that. you can get that from: post <- rstan::extract(fit); w_samples <- post$beta[, 1]
+      summary(rstan::sampling(sm, data = data_list, refresh = 0, chains = 1))$summary["beta[1]", c("mean", "sd", "2.5%", "97.5%")]
+    }, error = function(e) {
+      warning(sprintf("stan_glm failed: %s", e$message))
+      NULL
+    })
+    
+  } else if (prior_type == "G prior") {
+    # ---- g-prior base covariance from discordant design ----
+    XtX = crossprod(wX_dis)
+    # Fisher information approximation for logistic regression
+    W = 0.25
+    ridge = 1e-7
+    Sigma0 = solve(W * XtX + ridge * diag(ncol(wX_dis)))
+    g_val = nrow(wX_dis)
+    
+    data_list = list(
+      N = nrow(wX_dis),
+      K = ncol(wX_dis),
+      X = wX_dis,
+      y = y_dis_0_1,
+      mu = b_con,
+      Sigma = Sigma0,
+      g = g_val 
+    )
+    
+    discordant_model = tryCatch({
+      #for other aphas you would need to get the posterior for treatment effect and take the quarantines of that. you can get that from: post <- rstan::extract(fit); w_samples <- post$beta[, 1]
+      summary(rstan::sampling(sm_g, data = data_list, refresh = 0, chains = 1))$summary["beta[1]", c("mean", "sd", "2.5%", "97.5%")]
+    }, error = function(e) {
+      warning(sprintf("stan_glm failed: %s", e$message))
+      NULL
+    })
+    
+  } else if (prior_type == "PMP") {
+    
+    
+    # 3. Use the CONCORDANT covariance for the other covariates (X)
+    # Exclude intercept [1] and treatment [2]
+    mu_X_prior = matrix(b_con[-c(1)], ncol = 1)
+    Sigma_X_prior = as.matrix(Sigma_con[-c(1), -c(1)])
+    
+    data_list = list(
+      N = nrow(wX_dis),
+      K = ncol(wX_dis),
+      X = wX_dis,
+      y = y_dis_0_1,
+      mu_T = 0,  
+      V_T = 20,
+      mu_X = mu_X_prior, # Ensure vector for Stan
+      Sigma_X = Sigma_X_prior
+    )
+    
+    discordant_model = tryCatch({
+      #for other aphas you would need to get the posterior for treatment effect and take the quarantines of that. you can get that from: post <- rstan::extract(fit); w_samples <- post$beta[, 1]
+      summary(rstan::sampling(sm_PMP, data = data_list, refresh = 0, chains = 1))$summary["beta_T", c("mean", "sd", "2.5%", "97.5%")]
+    }, error = function(e) {
+      warning(sprintf("stan_glm failed: %s", e$message))
+      NULL
+    })
+    
+  }
   
   ret = list(
     betaT = NA,
@@ -146,25 +193,6 @@ Do_Inference = function(y, X, w, strat, beta_T, n, X_style, true_funtion, regres
       pval = pval
     ))
     
-    # ########################### DISCORDANT  ########################### 
-    # beta_hat_T = NA; ssq_beta_hat_T = NA; pval = NA
-    # if (discordant_viabele) {
-    #   model = summary(glm(y[dis_idx] ~ w[dis_idx] + X[dis_idx,], family = "binomial"))$coefficients[2,c(1,2)]
-    #   beta_hat_T = model[1]; ssq_beta_hat_T = model[2]
-    #   pval = 2 * pnorm(min(c(-1,1) * (beta_hat_T / ssq_beta_hat_T)))
-    # }
-    # res = rbind(res, data.frame(
-    #   n = n,
-    #   beta_T = beta_T,
-    #   X_style = X_style,
-    #   true_funtion = true_funtion,
-    #   regress_on_X = regress_on_X,
-    #   inference = "discordant",
-    #   beta_hat_T = beta_hat_T,
-    #   ssq_beta_hat_T = ssq_beta_hat_T,
-    #   pval = pval
-    # ))
-    
     ########################### LOGIT  ########################### 
     beta_hat_T = NA; ssq_beta_hat_T = NA; pval = NA
     if (TRUE) {
@@ -184,10 +212,10 @@ Do_Inference = function(y, X, w, strat, beta_T, n, X_style, true_funtion, regres
       pval = pval
     ))
     
-    ########################### BAYESIAN NO T PRIOR ########################### 
+    ########################### BAYESIAN ########################### 
     beta_hat_T = NA; ssq_beta_hat_T = NA; pval = NA; pval_freq = NA
     if (discordant_viabele & concordant_viabele) {
-      model = Bayesian_Clogit(y_dis, X_dis, w_dis, y_con, X_con, w_con, FALSE)
+      model = Bayesian_Clogit(y_dis, X_dis, w_dis, y_con, X_con, w_con, "normal")
       beta_hat_T = model$betaT; ssq_beta_hat_T = model$ssq_beta_T 
       pval = model$pval
       #pval_freq = 2 * pnorm(min(c(-1,1) * (beta_hat_T / ssq_beta_hat_T)))
@@ -203,49 +231,46 @@ Do_Inference = function(y, X, w, strat, beta_T, n, X_style, true_funtion, regres
       ssq_beta_hat_T = ssq_beta_hat_T,
       pval = pval
     ))
-    # res = rbind(res, data.frame(
-    #   n = n,
-    #   beta_T = beta_T,
-    #   X_style = X_style,
-    #   true_funtion = true_funtion,
-    #   regress_on_X = regress_on_X,
-    #   inference = "bayesian no T prior pavl-freq",
-    #   beta_hat_T = beta_hat_T,
-    #   ssq_beta_hat_T = ssq_beta_hat_T,
-    #   pval = pval_freq
-    # ))
     
-    # ########################### BAYESIAN ########################### 
-    # beta_hat_T = NA; ssq_beta_hat_T = NA; pval = NA; pval_freq = NA
-    # if (discordant_viabele & concordant_viabele) {
-    #   model = Bayesian_Clogit(y_dis, X_dis, w_dis, y_con, X_con, w_con, TRUE)
-    #   beta_hat_T = model$betaT; ssq_beta_hat_T = model$ssq_beta_T 
-    #   pval = model$pval
-    #   #pval_freq = 2 * pnorm(min(c(-1,1) * (beta_hat_T / ssq_beta_hat_T)))
-    # }
-    # res = rbind(res, data.frame(
-    #   n = n,
-    #   beta_T = beta_T,
-    #   X_style = X_style,
-    #   true_funtion = true_funtion,
-    #   regress_on_X = regress_on_X,
-    #   inference = "bayesian",
-    #   beta_hat_T = beta_hat_T,
-    #   ssq_beta_hat_T = ssq_beta_hat_T,
-    #   pval = pval
-    # ))
-    # 
-    # # res = rbind(res, data.frame(
-    # #   n = n,
-    # #   beta_T = beta_T,
-    # #   X_style = X_style,
-    # #   true_funtion = true_funtion,
-    # #   regress_on_X = regress_on_X,
-    # #   inference = "bayesian pavl-freq",
-    # #   beta_hat_T = beta_hat_T,
-    # #   ssq_beta_hat_T = ssq_beta_hat_T,
-    # #   pval = pval_freq
-    # # ))
+    ########################### BAYESIAN G PRIOR ########################### 
+    beta_hat_T = NA; ssq_beta_hat_T = NA; pval = NA; pval_freq = NA
+    if (discordant_viabele & concordant_viabele) {
+      model = Bayesian_Clogit(y_dis, X_dis, w_dis, y_con, X_con, w_con, "G prior")
+      beta_hat_T = model$betaT; ssq_beta_hat_T = model$ssq_beta_T 
+      pval = model$pval
+      #pval_freq = 2 * pnorm(min(c(-1,1) * (beta_hat_T / ssq_beta_hat_T)))
+    }
+    res = rbind(res, data.frame(
+      n = n,
+      beta_T = beta_T,
+      X_style = X_style,
+      true_funtion = true_funtion,
+      regress_on_X = regress_on_X,
+      inference = "bayesian G prior",
+      beta_hat_T = beta_hat_T,
+      ssq_beta_hat_T = ssq_beta_hat_T,
+      pval = pval
+    ))
+    
+    ########################### BAYESIAN PMP ########################### 
+    beta_hat_T = NA; ssq_beta_hat_T = NA; pval = NA; pval_freq = NA
+    if (discordant_viabele & concordant_viabele) {
+      model = Bayesian_Clogit(y_dis, X_dis, w_dis, y_con, X_con, w_con, "PMP")
+      beta_hat_T = model$betaT; ssq_beta_hat_T = model$ssq_beta_T 
+      pval = model$pval
+      #pval_freq = 2 * pnorm(min(c(-1,1) * (beta_hat_T / ssq_beta_hat_T)))
+    }
+    res = rbind(res, data.frame(
+      n = n,
+      beta_T = beta_T,
+      X_style = X_style,
+      true_funtion = true_funtion,
+      regress_on_X = regress_on_X,
+      inference = "bayesian PMP",
+      beta_hat_T = beta_hat_T,
+      ssq_beta_hat_T = ssq_beta_hat_T,
+      pval = pval
+    ))
     
     ########################### glmmTMB  ########################### 
     beta_hat_T = NA; ssq_beta_hat_T = NA; pval = NA
@@ -323,25 +348,6 @@ Do_Inference = function(y, X, w, strat, beta_T, n, X_style, true_funtion, regres
       ssq_beta_hat_T = ssq_beta_hat_T,
       pval = pval
     ))
-    
-    # ########################### DISCORDANT  ########################### 
-    # beta_hat_T = NA; ssq_beta_hat_T = NA; pval = NA
-    # if (discordant_viabele) {
-    #   model = summary(glm(y[dis_idx] ~ w[dis_idx], family = "binomial"))$coefficients[2,c(1,2)]
-    #   beta_hat_T = model[1]; ssq_beta_hat_T = model[2]
-    #   pval = 2 * pnorm(min(c(-1,1) * (beta_hat_T / ssq_beta_hat_T)))
-    # }
-    # res = rbind(res, data.frame(
-    #   n = n,
-    #   beta_T = beta_T,
-    #   X_style = X_style,
-    #   true_funtion = true_funtion,
-    #   regress_on_X = regress_on_X,
-    #   inference = "discordant",
-    #   beta_hat_T = beta_hat_T,
-    #   ssq_beta_hat_T = ssq_beta_hat_T,
-    #   pval = pval
-    # ))
     
     ########################### LOGIT  ########################### 
     beta_hat_T = NA; ssq_beta_hat_T = NA; pval = NA
@@ -478,7 +484,7 @@ Run_sim = function(beta_T, n, X_style) {
 }
 
 
-# for (j in 1:1000) {
+# for (j in 1:120) {
 #   cat("################", j, "################\n")
 #   beta_T = params[j,]$beta_T
 #   n = params[j,]$n
@@ -496,7 +502,7 @@ plan(multisession, workers = num_cores)
 
 ############### SIM ###############
 
-for (e_nsim in 2:external_nsim) {
+for (e_nsim in 86:external_nsim) {
 
   with_progress({
     prog = progressor(along = 1:nrow(params))
@@ -523,7 +529,7 @@ for (e_nsim in 2:external_nsim) {
       })
     }
   })
-  write.csv(results, file = paste0("C:/temp/clogitR_kap_test_from_scratch/10_", e_nsim, ".csv"), row.names = FALSE)
+  write.csv(results, file = paste0("C:/temp/clogitR_kap_test_from_scratch/", Nsim, "_", e_nsim, ".csv"), row.names = FALSE)
   rm(results); gc()
 }
 
@@ -532,11 +538,11 @@ plan(sequential)
 
 ############### COMPILE RESULTS ###############
 
-results = read.csv("C:/temp/clogitR_kap_test_from_scratch/1000_1.csv")
+results = read.csv("C:/temp/clogitR_kap_test_from_scratch/100_1.csv")
 
 sum = 1
 for (i in 2:475) {
-  file_path <- paste0("C:/temp/clogitR_kap_test_from_scratch/10_", i, ".csv")
+  file_path <- paste0("C:/temp/clogitR_kap_test_from_scratch/100_", i, ".csv")
   if (file.exists(file_path)) {
     sum = sum +1
     message("Reading file ", i)
@@ -547,10 +553,10 @@ for (i in 2:475) {
   }
 }
 
-for (i in 2:475){
-  print(i)
-  results = rbind(results, read.csv(paste0("C:/temp/clogitR_kap_test_from_scratch/1000_", i, ".csv")))
-}
+# for (i in 2:475){
+#   print(i)
+#   results = rbind(results, read.csv(paste0("C:/temp/clogitR_kap_test_from_scratch/1000_", i, ".csv")))
+# }
 
 results$X = NULL
 
@@ -567,5 +573,4 @@ res_mod = results %>%
     .groups = "drop")
 
 
-write.csv(res_mod, file = "C:/temp/clogitR_kap_test_from_scratch/combined_160.csv", row.names = FALSE)
-
+write.csv(res_mod, file = "C:/temp/clogitR_kap_test_from_scratch/combined_14000.csv", row.names = FALSE)
