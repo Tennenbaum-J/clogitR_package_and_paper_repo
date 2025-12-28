@@ -15,6 +15,7 @@ regress_on_Xs = c("all", "one", "none")
 sm = rstan::stan_model("mvn_logistic.stan")
 sm_g = rstan::stan_model("mvn_logistic_gprior.stan")
 sm_PMP = rstan::stan_model("mvn_logistic_PMP.stan")
+sm_hybrid = rstan::stan_model("mvn_logistic_Hybrid.stan")
 
 params = expand.grid(
   nsim = 1:Nsim,
@@ -123,6 +124,33 @@ Bayesian_Clogit = function(y_dis, X_dis, w_dis, y_con, X_con, w_con, prior_type)
       NULL
     })
     
+  } else if (prior_type == "Hybrid_PMP") {
+    
+    # 1. Prepare Historical Data (The 'Freedom' Input)
+    # Extract historical coefficients (mu_hist)
+    mu_hist_val = b_con 
+    
+    # Calculate Precision Matrix W (Inverse of Sigma_con)
+    # We use solve() to get W from the historical covariance
+    W_hist_val = solve(Sigma_con) 
+    
+    data_list = list(
+      N = nrow(wX_dis),
+      K = ncol(wX_dis),
+      X = wX_dis,
+      y = y_dis_0_1,
+      mu_hist = mu_hist_val,  # theta_hist in your formula
+      W_hist = W_hist_val     # W in your formula
+    )
+    
+    discordant_model = tryCatch({
+      # beta[1] is our parameter of interest (Treatment Effect)
+      fit_hybrid = rstan::sampling(sm_hybrid, data = data_list, refresh = 0, chains = 1)
+      summary(fit_hybrid)$summary["beta[1]", c("mean", "sd", "2.5%", "97.5%")]
+    }, error = function(e) {
+      warning(sprintf("Hybrid PMP failed: %s", e$message))
+      NULL
+    })
   }
   
   ret = list(
