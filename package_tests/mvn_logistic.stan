@@ -3,7 +3,6 @@ data {
   int<lower=1> K;                      // number of predictors
   matrix[N, K] X;                      // design matrix
   int<lower=0,upper=1> y[N];           // binary outcomes
-
   vector[K] mu;                        // prior mean vector
   matrix[K, K] Sigma;                  // prior covariance matrix
 }

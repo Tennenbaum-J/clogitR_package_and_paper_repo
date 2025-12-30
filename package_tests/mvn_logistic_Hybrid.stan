@@ -1,59 +1,39 @@
 data {
-  int<lower=1> N;
-  int<lower=1> K;
-  matrix[N, K] X;
-  int<lower=0,upper=1> y[N];
-  real mu_T;
-  real<lower=0> V_T;
-  matrix[K-1, 1] mu_X;      // Changed to matrix[K-1, 1] as requested
-  matrix[K-1, K-1] Sigma_X;
+  int<lower=0> N;
+  int<lower=0> P;
+  int<lower=0, upper=1> y[N]; // Binary outcome
+  vector[N] xw;                // Parameter of interest (orthogonalized)
+  matrix[N, P] X;              // Nuisance predictors
+  
+  // Informative Prior from Dataset A
+  vector[P] mu_A;
+  matrix[P, P] Sigma_A;
 }
+
 parameters {
-  real beta_T;
-  vector[K-1] beta_X;
+  real beta_w;
+  vector[P] beta_nuis;
+  real<lower=0> g;             // The hyper-parameter for nuisance strength
 }
+
 model {
-  // 1. FREEDOM FUNCTION g(lambda)
-  // Converting mu_X to a vector inside the call to match the parameter type
-  if (K > 1) {
-    beta_X ~ multi_normal(to_vector(mu_X), Sigma_X); //
+  g ~ inv_gamma(0.5, N / 2.0);
+  
+  // 1. Calculate the PMP Adjustment (log square root of Fisher Info)
+  vector[N] eta = xw * beta_w + X * beta_nuis;
+  vector[N] p = inv_logit(eta);
+  real I_ww = 0;
+  for (i in 1:N) {
+    // Weighting term for logistic information: p*(1-p)
+    I_ww += square(xw[i]) * p[i] * (1 - p[i]);
   }
-  beta_T ~ normal(mu_T, sqrt(V_T));
+  
+  // Add log(sqrt(I_ww)) to the target log-density
+  target += 0.5 * log(I_ww);
 
-  // 2. THE PMP COMPONENT (Partial Fisher Information)
-  vector[K] beta_full;
-  beta_full[1] = beta_T;
-  if (K > 1) {
-    beta_full[2:K] = beta_X;
-  }
-  
-  vector[N] p = inv_logit(X * beta_full);
-  vector[N] w_vec = p .* (1.0 - p); // weights w_ii = p_i(1-p_i)
-  
-  matrix[K, K] Info;
-  for (i in 1:K) {
-    for (j in i:K) {
-      Info[i, j] = dot_product(X[, i] .* w_vec, X[, j]); //
-      Info[j, i] = Info[i, j]; 
-    }
-  }
-  
-  real partial_info;
-  if (K > 1) {
-    real I_psi_psi = Info[1, 1];
-    vector[K-1] I_psi_lambda = Info[2:K, 1];
-    matrix[K-1, K-1] I_lambda_lambda = Info[2:K, 2:K] + diag_matrix(rep_vector(1e-9, K-1));
-    
-    // PMP formula: I_psi_psi - I_psi_lambda * inv(I_lambda_lambda) * I_psi_lambda
-    partial_info = I_psi_psi - dot_product(I_psi_lambda, mdivide_left_spd(I_lambda_lambda, I_psi_lambda));
-  } else {
-    partial_info = Info[1, 1];
-  }
-  
-  if (partial_info > 1e-12) {
-    target += 0.5 * log(partial_info); // The hybrid logic
-  }
+  // 2. Informative Prior for Nuisance Parameters
+  beta_nuis ~ multi_normal(mu_A, g * Sigma_A);
 
-  // 3. LIKELIHOOD
-  y ~ bernoulli_logit(X * beta_full);
+  // 3. Likelihood
+  y ~ bernoulli_logit(eta);
 }

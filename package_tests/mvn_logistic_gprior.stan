@@ -1,24 +1,33 @@
 data {
-  int<lower=1> N;
-  int<lower=1> K;
-  matrix[N, K] X;
-  int y[N];
-  vector[K] mu;
-  matrix[K, K] Sigma; // (X'WX)^-1
-  real<lower=0> g;    // Pass this as data, e.g., N
+  int<lower=1> N;                      // number of observations
+  int<lower=1> K;                      // number of predictors
+  matrix[N, K] X;                      // design matrix
+  int<lower=0,upper=1> y[N];           // binary outcomes
+  vector[K] mu;                        // prior mean vector
+  matrix[K, K] Sigma;                  // prior covariance matrix
 }
+
 transformed data {
-  matrix[K, K] L_prior;
-  // Scale the covariance by g
-  L_prior = cholesky_decompose(g * Sigma + 1e-8 * diag_matrix(rep_vector(1.0, K)));
+  matrix[K, K] L_Sigma = cholesky_decompose(Sigma);
 }
+
 parameters {
-  vector[K] z;
+vector[K] z;                           // Helper: Standard Normal(0,1)
+  real<lower=0> g;                     // The hyper-parameter g (the scaling factor)
 }
+
 transformed parameters {
-  vector[K] beta = mu + L_prior * z;
+  // Manual re-centering: beta = mu + sqrt(g) * L * z
+  // This is mathematically the same as beta ~ N(mu, g*Sigma)
+  // The reason we do this is to decouple g from beta
+  vector[K] beta = mu + sqrt(g) * (L_Sigma * z);
 }
+
 model {
+  // Hyper-prior: Zellner-Siow
+  g ~ inv_gamma(0.5, N/2.0);
+  // Prior for the helper (leads to the g-prior for beta)
   z ~ std_normal();
+  // Likelihood
   y ~ bernoulli_logit(X * beta);
 }
