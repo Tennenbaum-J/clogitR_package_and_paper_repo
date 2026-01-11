@@ -546,7 +546,7 @@ Run_sim = function(beta_T, n, X_style) {
   
   for (true_funtion in true_funtions) {
     if (true_funtion == "linear") {
-      beta_X = c(1, 1, 1, 1, 1, 1)
+      beta_X = c(1.25, 1.25, 1.25, 1.25, 1.25, 1.25)
       beta_0 = -0.5
       probs = 1 / (1 + exp(-(beta_0 + (as.matrix(X) %*% beta_X) + beta_T * w)))
     } else {
@@ -555,12 +555,12 @@ Run_sim = function(beta_T, n, X_style) {
     }
     y = rbinom(n, 1, probs)
     
-    # df = data.frame(y = y, probs = probs)
-    # ggplot(df, aes(x = probs, fill = factor(y))) +
-    #   geom_histogram(position = "identity", alpha = 0.6, bins = 30) +
-    #   labs(x = "Predicted probability", fill = "Outcome") +
-    #   scale_fill_manual(values = c("0" = "red", "1" = "blue")) +
-    #   theme_minimal()
+    df = data.frame(y = y, probs = probs)
+    ggplot(df, aes(x = probs, fill = factor(y))) +
+      geom_histogram(position = "identity", alpha = 0.6, bins = 30) +
+      labs(x = "Predicted probability", fill = "Outcome") +
+      scale_fill_manual(values = c("0" = "red", "1" = "blue")) +
+      theme_minimal()
     
     for (regress_on_X in regress_on_Xs) {
       if (regress_on_X == "one") {

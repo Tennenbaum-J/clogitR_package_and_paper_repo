@@ -1,27 +1,36 @@
 data {
-  int<lower=1> N;
-  int<lower=1> K;
-  matrix[N, K] X;
-  int<lower=0,upper=1> y[N];
-
-  real mu_T;
-  real<lower=0> V_T;
-
-  matrix[K-1, 1] mu_X;
-  matrix[K-1, K-1] Sigma_X;
+  int<lower=0> N;
+  int<lower=0> P;
+  int<lower=0, upper=1> y[N]; // Binary outcome
+  vector[N] xw;                // Parameter of interest (orthogonalized)
+  matrix[N, P] X;              // Nuisance predictors
+  
+  // Informative Prior from Dataset A
+  vector[P] mu_A;
+  matrix[P, P] Sigma_A;
 }
 
 parameters {
-  real beta_T;
-  vector[K-1] beta_X;
+  real beta_w;
+  vector[P] beta_nuis;
 }
 
 model {
-  beta_T ~ normal(mu_T, sqrt(V_T));
-  beta_X ~ multi_normal(to_vector(mu_X), Sigma_X);
+  // 1. Calculate the PMP Adjustment (log square root of Fisher Info)
+  vector[N] eta = xw * beta_w + X * beta_nuis;
+  vector[N] p = inv_logit(eta);
+  real I_ww = 0;
+  for (i in 1:N) {
+    // Weighting term for logistic information: p*(1-p)
+    I_ww += square(xw[i]) * p[i] * (1 - p[i]);
+  }
+  
+  // Add log(sqrt(I_ww)) to the target log-density
+  target += 0.5 * log(I_ww);
 
-  y ~ bernoulli_logit(
-        beta_T * X[,1]
-        + X[,2:K] * beta_X
-      );
+  // 2. Informative Prior for Nuisance Parameters
+  beta_nuis ~ multi_normal(mu_A, Sigma_A);
+
+  // 3. Likelihood
+  y ~ bernoulli_logit(eta);
 }
