@@ -1,15 +1,16 @@
-pacman::p_load(clogitR, dplyr, data.table, doFuture, future, doRNG, foreach, progressr, doParallel, nbpMatching, doParallel, ggplot2, geepack, glmmTMB, rstan) #doParallel
+pacman::p_load(clogitR, dplyr, tidyr, data.table, doFuture, future, doRNG, foreach, progressr, doParallel, nbpMatching, doParallel, ggplot2, geepack, glmmTMB, rstan, binaryMM) #doParallel
 options(error = recover)
 rm(list = ls())
 ############### parameters ###############
 num_cores = availableCores() - 6
+ps = c(6, 20)
 Nsim = 100
 external_nsim = 100000
 ns = c(100, 250, 500)
-beta_Ts = c(0,1)
+beta_Ts = c(0,0.5)
 X_styles = c("non-correlated") #"correlated", 
 true_funtions = c("linear", "non-linear")
-regress_on_Xs = c("one", "two") #"all", "one", "none"
+regress_on_Xs = c("one", "some") #"all", "one", "none"
 
 #Bayesian_prior_for_betaTs = c(TRUE, FALSE)
 sm = rstan::stan_model("mvn_logistic.stan")
@@ -19,19 +20,20 @@ sm_hybrid = rstan::stan_model("mvn_logistic_Hybrid.stan")
 
 params = expand.grid(
   nsim = 1:Nsim,
+  p = ps,
   beta_T = beta_Ts,
   n = ns,
   X_style = X_styles
 )
 
 params = params %>%
-  arrange(nsim, beta_T, n, X_style) 
+  arrange(nsim, p, beta_T, n, X_style) 
 
 ############### CODE ###############
 
 Bayesian_Clogit = function(y_dis, X_dis, w_dis, y_con, X_con, w_con, prior_type, concordant_fit) {
   
-  if (concordant_fit == "reg") {
+  if (concordant_fit == "GLM") {
     fit_con = glm(y_con ~ w_con + X_con, family = "binomial")
     b_con = summary(fit_con)$coefficients[,1]
     Sigma_con = pmin(vcov(fit_con), 20)
@@ -52,6 +54,22 @@ Bayesian_Clogit = function(y_dis, X_dis, w_dis, y_con, X_con, w_con, prior_type,
     
     b_con = summary(fit_con)$coefficients[,1]
     Sigma_con = pmin(vcov(fit_con), 20)
+    eps = 1e-6         #added for stabilibty
+    Sigma_con = Sigma_con + diag(eps, nrow(Sigma_con))
+    
+    b_con = c(0, b_con[-c(1,2)])
+    Sigma_con = Sigma_con[-1,-1]; Sigma_con[1,] = 0; Sigma_con[, 1] = 0; Sigma_con[1,1] = 20
+  } else if (concordant_fit == "GLMM") {
+    strat_con = rep(1:(nrow(X_con)/2), each = 2)
+    
+    fit_con = glmmTMB(
+      y_con ~  w_con + X_con + (1 | strat_con),
+      family = binomial(),
+      data   = data.frame(y_con, w_con, X_con, strat_con)
+    )
+    
+    b_con = summary(fit_con)$coefficients$cond[,1]
+    Sigma_con = pmin(vcov(fit_con)$cond, 20)
     eps = 1e-6         #added for stabilibty
     Sigma_con = Sigma_con + diag(eps, nrow(Sigma_con))
     
@@ -198,9 +216,10 @@ Bayesian_Clogit = function(y_dis, X_dis, w_dis, y_con, X_con, w_con, prior_type,
   return(ret)
 }
 
-Do_Inference = function(y, X, w, strat, beta_T, n, X_style, true_funtion, regress_on_X) {
+Do_Inference = function(y, X, w, strat, p, beta_T, n, X_style, true_funtion, regress_on_X) {
   res = data.frame(
     n = numeric(),
+    p = numeric(),
     beta_T = numeric(),
     X_style = character(),
     true_funtion = character(),
@@ -225,7 +244,7 @@ Do_Inference = function(y, X, w, strat, beta_T, n, X_style, true_funtion, regres
   w_dis =     matched_data$treatment_diffs_discordant
   dis_idx =           matched_data$discordant_idx + 1
   
-  if (regress_on_X %in% c("all", "one", "two")) {
+  if (regress_on_X %in% c("one", "some")) { #"all", 
     discordant_viabele = if(length(y_dis) > ncol(X) + 7) { TRUE } else { FALSE }
     concordant_viabele = if(length(y_con) > ncol(X) + 7) { TRUE } else { FALSE }
     
@@ -239,6 +258,7 @@ Do_Inference = function(y, X, w, strat, beta_T, n, X_style, true_funtion, regres
     }
     res = rbind(res, data.frame(
       n = n,
+      p = p,
       beta_T = beta_T,
       X_style = X_style,
       true_funtion = true_funtion,
@@ -258,6 +278,7 @@ Do_Inference = function(y, X, w, strat, beta_T, n, X_style, true_funtion, regres
     }
     res = rbind(res, data.frame(
       n = n,
+      p = p,
       beta_T = beta_T,
       X_style = X_style,
       true_funtion = true_funtion,
@@ -269,92 +290,28 @@ Do_Inference = function(y, X, w, strat, beta_T, n, X_style, true_funtion, regres
     ))
     
     ########################### BAYESIAN ########################### 
-    for (concordant_fit in c("reg", "GEE")) {
-      beta_hat_T = NA; ssq_beta_hat_T = NA; pval = NA; pval_freq = NA
-      if (discordant_viabele & concordant_viabele) {
-        model = Bayesian_Clogit(y_dis, X_dis, w_dis, y_con, X_con, w_con, "normal", concordant_fit)
-        beta_hat_T = model$betaT; ssq_beta_hat_T = model$ssq_beta_T 
-        pval = model$pval
-        #pval_freq = 2 * pnorm(min(c(-1,1) * (beta_hat_T / ssq_beta_hat_T)))
+    for (prior_type in c("normal", "G prior", "Hybrid")) { #"PMP"
+      for (concordant_fit in c("GLM", "GEE", "GLMM")) {
+        beta_hat_T = NA; ssq_beta_hat_T = NA; pval = NA; pval_freq = NA
+        if (discordant_viabele & concordant_viabele) {
+          model = Bayesian_Clogit(y_dis, X_dis, w_dis, y_con, X_con, w_con, prior_type, concordant_fit)
+          beta_hat_T = model$betaT; ssq_beta_hat_T = model$ssq_beta_T 
+          pval = model$pval
+          #pval_freq = 2 * pnorm(min(c(-1,1) * (beta_hat_T / ssq_beta_hat_T)))
+        }
+        res = rbind(res, data.frame(
+          n = n,
+          p = p,
+          beta_T = beta_T,
+          X_style = X_style,
+          true_funtion = true_funtion,
+          regress_on_X = regress_on_X,
+          inference = paste0("bayesian_", prior_type, "_", concordant_fit),
+          beta_hat_T = beta_hat_T,
+          ssq_beta_hat_T = ssq_beta_hat_T,
+          pval = pval
+        ))
       }
-      res = rbind(res, data.frame(
-        n = n,
-        beta_T = beta_T,
-        X_style = X_style,
-        true_funtion = true_funtion,
-        regress_on_X = regress_on_X,
-        inference = paste0("bayesian_", concordant_fit),
-        beta_hat_T = beta_hat_T,
-        ssq_beta_hat_T = ssq_beta_hat_T,
-        pval = pval
-      ))
-    }
-    
-    
-    ########################### BAYESIAN G PRIOR ########################### 
-    for (concordant_fit in c("reg", "GEE")) {
-      beta_hat_T = NA; ssq_beta_hat_T = NA; pval = NA; pval_freq = NA
-      if (discordant_viabele & concordant_viabele) {
-        model = Bayesian_Clogit(y_dis, X_dis, w_dis, y_con, X_con, w_con, "G prior", concordant_fit)
-        beta_hat_T = model$betaT; ssq_beta_hat_T = model$ssq_beta_T 
-        pval = model$pval
-        #pval_freq = 2 * pnorm(min(c(-1,1) * (beta_hat_T / ssq_beta_hat_T)))
-      }
-      res = rbind(res, data.frame(
-        n = n,
-        beta_T = beta_T,
-        X_style = X_style,
-        true_funtion = true_funtion,
-        regress_on_X = regress_on_X,
-        inference = paste0("bayesian G prior_", concordant_fit),
-        beta_hat_T = beta_hat_T,
-        ssq_beta_hat_T = ssq_beta_hat_T,
-        pval = pval
-      ))
-    }
-    
-    ########################### BAYESIAN PMP ########################### 
-    # for (concordant_fit in c("reg", "GEE")) {
-    #   beta_hat_T = NA; ssq_beta_hat_T = NA; pval = NA; pval_freq = NA
-    #   if (discordant_viabele & concordant_viabele) {
-    #     model = Bayesian_Clogit(y_dis, X_dis, w_dis, y_con, X_con, w_con, "PMP", concordant_fit)
-    #     beta_hat_T = model$betaT; ssq_beta_hat_T = model$ssq_beta_T 
-    #     pval = model$pval
-    #     #pval_freq = 2 * pnorm(min(c(-1,1) * (beta_hat_T / ssq_beta_hat_T)))
-    #   }
-    #   res = rbind(res, data.frame(
-    #     n = n,
-    #     beta_T = beta_T,
-    #     X_style = X_style,
-    #     true_funtion = true_funtion,
-    #     regress_on_X = regress_on_X,
-    #     inference = paste0("bayesian PMP_", concordant_fit),
-    #     beta_hat_T = beta_hat_T,
-    #     ssq_beta_hat_T = ssq_beta_hat_T,
-    #     pval = pval
-    #   ))
-    # }
-    
-    ########################### BAYESIAN Hybrid ########################### 
-    for (concordant_fit in c("reg", "GEE")) {
-      beta_hat_T = NA; ssq_beta_hat_T = NA; pval = NA; pval_freq = NA
-      if (discordant_viabele & concordant_viabele) {
-        model = Bayesian_Clogit(y_dis, X_dis, w_dis, y_con, X_con, w_con, "Hybrid", concordant_fit)
-        beta_hat_T = model$betaT; ssq_beta_hat_T = model$ssq_beta_T 
-        pval = model$pval
-        #pval_freq = 2 * pnorm(min(c(-1,1) * (beta_hat_T / ssq_beta_hat_T)))
-      }
-      res = rbind(res, data.frame(
-        n = n,
-        beta_T = beta_T,
-        X_style = X_style,
-        true_funtion = true_funtion,
-        regress_on_X = regress_on_X,
-        inference = paste0("bayesian Hybrid_", concordant_fit),
-        beta_hat_T = beta_hat_T,
-        ssq_beta_hat_T = ssq_beta_hat_T,
-        pval = pval
-      ))
     }
     
     ########################### glmmTMB  ########################### 
@@ -373,11 +330,12 @@ Do_Inference = function(y, X, w, strat, beta_T, n, X_style, true_funtion, regres
     })
     res = rbind(res, data.frame(
       n = n,
+      p = p,
       beta_T = beta_T,
       X_style = X_style,
       true_funtion = true_funtion,
       regress_on_X = regress_on_X,
-      inference = "glmmTMB",
+      inference = "GLMM",
       beta_hat_T = beta_hat_T,
       ssq_beta_hat_T = ssq_beta_hat_T,
       pval = pval
@@ -401,6 +359,7 @@ Do_Inference = function(y, X, w, strat, beta_T, n, X_style, true_funtion, regres
     })
     res = rbind(res, data.frame(
       n = n,
+      p = p,
       beta_T = beta_T,
       X_style = X_style,
       true_funtion = true_funtion,
@@ -410,6 +369,55 @@ Do_Inference = function(y, X, w, strat, beta_T, n, X_style, true_funtion, regres
       ssq_beta_hat_T = ssq_beta_hat_T,
       pval = pval
     ))
+    
+    ########################### binaryMM ########################### 
+    # beta_hat_T = NA; ssq_beta_hat_T = NA; pval = NA
+    # tryCatch({
+    #   # binaryMM requires a data frame and explicit column names
+    #   df_mm = data.frame(y = y, w = w, strat = strat)
+    #   df_mm = cbind(df_mm, X) # Add covariates
+    #   
+    #   # Construct the formula dynamically based on X columns
+    #   if (is.null(colnames(X))) {
+    #     colnames(X) = paste0("V", 1:ncol(X))
+    #   }
+    #   x_names = colnames(X)
+    #   mm_formula = as.formula(paste("y ~ w +", paste(x_names, collapse = " + ")))
+    #   
+    #   fit_mm = mm(
+    #     formula = mm_formula,
+    #     id = strat,
+    #     data = df_mm,
+    #     # 'average' provides the population-averaged (marginal) effects
+    #     # similar to GEE, but via a different estimation method
+    #     type = "marginal" 
+    #   )
+    #   
+    #   # Extracting coefficients for the treatment effect 'w'
+    #   # binaryMM stores results in a 'coefficients' matrix
+    #   mm_sum = summary(fit_mm)
+    #   beta_hat_T = mm_sum$coefficients["w", "Estimate"]
+    #   ssq_beta_hat_T = mm_sum$coefficients["w", "Std.Error"]
+    #   
+    #   # Standard Wald-type p-value calculation
+    #   pval = 2 * pnorm(-abs(beta_hat_T / ssq_beta_hat_T))
+    #   
+    # }, error = function(e) {
+    #   beta_hat_T <<- NA; ssq_beta_hat_T <<- NA; pval <<- NA
+    # })
+    # 
+    # res = rbind(res, data.frame(
+    #   n = n,
+    #   p = p,
+    #   beta_T = beta_T,
+    #   X_style = X_style,
+    #   true_funtion = true_funtion,
+    #   regress_on_X = regress_on_X,
+    #   inference = "binaryMM",
+    #   beta_hat_T = beta_hat_T,
+    #   ssq_beta_hat_T = ssq_beta_hat_T,
+    #   pval = pval
+    # ))
     
   } else { #if no x then remove the x parameter
     discordant_viabele = if(length(y_dis) > 5) { TRUE } else { FALSE }
@@ -513,19 +521,19 @@ Do_Inference = function(y, X, w, strat, beta_T, n, X_style, true_funtion, regres
   return(res)
 }
 
-Run_sim = function(beta_T, n, X_style) {
+Run_sim = function(p, beta_T, n, X_style) {
   BIG_res = data.frame()
   y = array(NA, n)
   probs = array(NA, n)
   
   if (X_style == "correlated") { ############## correlated is the old style
-    Sigma = 1 * (matrix(0.5, nrow = 6, ncol = 6) + diag(1 - 0.5, 6))
-    X = MASS::mvrnorm(n/2, rep(0, 6), Sigma)
+    Sigma = 1 * (matrix(0.5, nrow = p, ncol = p) + diag(1 - 0.5, p))
+    X = MASS::mvrnorm(n/2, rep(0, p), Sigma)
     X = pnorm(X)
-    X = matrix(2*X - 1, ncol = 6)
+    X = matrix(2*X - 1, ncol = p)
   } else {
-    X = matrix(runif((n/2) * 6, min = -1, max = 1), ncol = 6)
-    X_plus_eps = X + matrix(rnorm((n/2) * 6, 0, 0.1),ncol = 6)
+    X = matrix(runif((n/2) * p, min = -1, max = 1), ncol = p)
+    X_plus_eps = X + matrix(rnorm((n/2) * p, 0, 0.05),ncol = p)
     combined = rbind(X, X_plus_eps)
     ids = order(c(1:(n/2), 1:(n/2)))
     X = combined[ids, ]
@@ -546,7 +554,8 @@ Run_sim = function(beta_T, n, X_style) {
   
   for (true_funtion in true_funtions) {
     if (true_funtion == "linear") {
-      beta_X = c(1.25, 1.25, 1.25, 1.25, 1.25, 1.25)
+      beta_X_value = if (p == 6) { 1.25 } else { 0.75 }
+      beta_X = rep(beta_X_value, p)
       beta_0 = -0.5
       probs = 1 / (1 + exp(-(beta_0 + (as.matrix(X) %*% beta_X) + beta_T * w)))
     } else {
@@ -555,22 +564,22 @@ Run_sim = function(beta_T, n, X_style) {
     }
     y = rbinom(n, 1, probs)
     
-    df = data.frame(y = y, probs = probs)
-    ggplot(df, aes(x = probs, fill = factor(y))) +
-      geom_histogram(position = "identity", alpha = 0.6, bins = 30) +
-      labs(x = "Predicted probability", fill = "Outcome") +
-      scale_fill_manual(values = c("0" = "red", "1" = "blue")) +
-      theme_minimal()
+    # df = data.frame(y = y, probs = probs)
+    # ggplot(df, aes(x = probs, fill = factor(y))) +
+    #   geom_histogram(position = "identity", alpha = 0.6, bins = 30) +
+    #   labs(x = "Predicted probability", fill = "Outcome") +
+    #   scale_fill_manual(values = c("0" = "red", "1" = "blue")) +
+    #   theme_minimal()
     
     for (regress_on_X in regress_on_Xs) {
       if (regress_on_X == "one") {
         X_run = X[,1, drop = FALSE]
-      } else if (regress_on_X == "two") {
-        X_run = X[,c(1,2), drop = FALSE]
+      } else if (regress_on_X == "some") {
+        if (p == 20) { X_run = X[,1:5, drop = FALSE] } else { X_run = X[,c(1,2), drop = FALSE] }
       } else {
         X_run = X
       }
-      one_res = Do_Inference(y, X_run, w, strat, beta_T, n, X_style, true_funtion, regress_on_X)
+      one_res = Do_Inference(y, X_run, w, strat, p, beta_T, n, X_style, true_funtion, regress_on_X)
       BIG_res = rbind(BIG_res, one_res)
     }
   }
@@ -578,13 +587,14 @@ Run_sim = function(beta_T, n, X_style) {
 }
 
 
-for (j in 1:120) {
-  cat("################", j, "################\n")
-  beta_T = params[j,]$beta_T
-  n = params[j,]$n
-  X_style = params[j,]$X_style
-  print(Run_sim(beta_T = beta_T, n = n, X_style = X_style)); cat('\n')
-}
+# for (j in 1:120) {
+#   cat("################", j, "################\n")
+#   p = params[j,]$p
+#   beta_T = params[j,]$beta_T
+#   n = params[j,]$n
+#   X_style = params[j,]$X_style
+#   print(Run_sim(p = p, beta_T = beta_T, n = n, X_style = X_style)); cat('\n')
+# }
 
 ############### SIM SET UP ###############
 
@@ -596,7 +606,7 @@ plan(multisession, workers = num_cores)
 
 ############### SIM ###############
 
-for (e_nsim in 22:external_nsim) {
+for (e_nsim in 1:external_nsim) {
 
   with_progress({
     prog = progressor(along = 1:nrow(params))
@@ -608,11 +618,12 @@ for (e_nsim in 22:external_nsim) {
 
       # extract parameters
       nsim = row$nsim
+      p = row$p
       beta_T = row$beta_T
       n = row$n
       X_style = row$X_style
       res = tryCatch({
-        out = Run_sim(beta_T, n, X_style)
+        out = Run_sim(p, beta_T, n, X_style)
         #cat("Successfully ran simulation")
         prog()
         out
@@ -655,16 +666,23 @@ for (i in 2:475) {
 results$X = NULL
 
 res_mod = results %>%
-  mutate(sq_err = (beta_hat_T - beta_T)^2, rej = pval < 0.05) %>%
-  group_by(beta_T, true_funtion, regress_on_X, n, inference, X_style) %>%
+  mutate(
+    lower_ci = beta_hat_T - (1.96 * ssq_beta_hat_T),
+    upper_ci = beta_hat_T + (1.96 * ssq_beta_hat_T),
+    covered = (lower_ci <= beta_T) & (upper_ci >= beta_T),
+    sq_err = (beta_hat_T - beta_T)^2,
+    rej = pval < 0.05
+    ) %>%
+  group_by(p, beta_T, true_funtion, regress_on_X, n, inference, X_style) %>%
   summarize(
     num_na = sum(is.na(pval)), 
     num_real = sum(!is.na(pval)),
     mse = mean(sq_err, na.rm = TRUE),
     percent_reject = sum(rej, na.rm = TRUE) / (n() - num_na),
+    coverage = mean(covered, na.rm = TRUE),
     mean_beta_hat_T = mean(beta_hat_T, na.rm = TRUE),
-    mean_sq_beta_hat_T = mean(sqrt(ssq_beta_hat_T), trim = 0.001, na.rm = TRUE),
+    mean_sq_beta_hat_T = mean(ssq_beta_hat_T, trim = 0.001, na.rm = TRUE),
     .groups = "drop")
 
 
-write.csv(res_mod, file = "C:/temp/clogitR_kap_test_from_scratch/combined_4600.csv", row.names = FALSE)
+write.csv(res_mod, file = "C:/temp/clogitR_kap_test_from_scratch/combined_2100.csv", row.names = FALSE)
