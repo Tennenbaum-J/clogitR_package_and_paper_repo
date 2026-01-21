@@ -33,10 +33,11 @@ List process_matched_pairs_cpp(
   }
   
   // Pre-allocate with upper bounds (concordant pairs will add to reservoir)
-  int max_concordant = max_strata; // worst case: all pairs are concordant
-  Eigen::MatrixXd reservoir_X(n_reservoir + 2 * max_concordant, p);
-  Eigen::VectorXd reservoir_y(n_reservoir + 2 * max_concordant);
-  Eigen::VectorXd reservoir_treat(has_treatment ? n_reservoir + 2 * max_concordant : 0);
+
+  Eigen::MatrixXd reservoir_X(n_reservoir + 2 * max_strata, p);
+  Eigen::VectorXd reservoir_y(n_reservoir + 2 * max_strata);
+  Eigen::VectorXd reservoir_treat(has_treatment ? n_reservoir + 2 * max_strata : 0);
+  Eigen::VectorXi reservoir_strata(n_reservoir + 2 * max_strata);
   
   Eigen::MatrixXd diffs_X(max_strata, p); // at most max_strata discordant pairs
   Eigen::VectorXd diffs_y(max_strata);
@@ -55,6 +56,7 @@ List process_matched_pairs_cpp(
       if (has_treatment) {
         reservoir_treat[res_idx] = treat_vec[i];
       }
+      reservoir_strata[res_idx] = strata[i];
       res_idx++;
     }
   }
@@ -82,6 +84,7 @@ List process_matched_pairs_cpp(
     const int j = pair[1];
     const double yi = y[i];
     const double yj = y[j];
+    int current_stratum = 1;
     
     if (yi == yj) {
       // Concordant pair → add to reservoir
@@ -90,6 +93,7 @@ List process_matched_pairs_cpp(
       if (has_treatment) {
         reservoir_treat[res_idx] = treat_vec[i];
       }
+      reservoir_strata[res_idx] = current_stratum;
       res_idx++;
       
       reservoir_X.row(res_idx) = X.row(j);
@@ -97,6 +101,8 @@ List process_matched_pairs_cpp(
       if (has_treatment) {
         reservoir_treat[res_idx] = treat_vec[j];
       }
+      reservoir_strata[res_idx] = current_stratum;
+      current_stratum++;
       res_idx++;
     } else {
       // Discordant → compute diff (case - control)
@@ -119,24 +125,6 @@ List process_matched_pairs_cpp(
     }
   }
   
-  // Check if we have enough discordant pairs
-  if (diff_idx < p + 5) {
-    warning("There are not enough discordant pairs. All the data was put in the reservoir.");
-    return List::create(
-      _["X_reservoir_concordant"] = X,
-      _["y_reservoir_concordant"] = y,
-      _["treatment_reservoir_concordant"] = treatment,
-      _["X_diffs_discordant"] = R_NilValue,
-      _["y_diffs_discordant"] = R_NilValue,
-      _["treatment_diffs_discordant"] = R_NilValue,
-      _["dropped_discordant"] = true,
-      _["dropped_reservoir_concordant"] = false,
-      _["discordant_idx"] = R_NilValue
-    );
-  }
-  
-  bool dropped_reservoir = (res_idx <= p + 5);
-  
   // Resize to actual sizes (cheap operation, just changes dimensions)
   if (res_idx > 0) {
     reservoir_X.conservativeResize(res_idx, p);
@@ -144,6 +132,7 @@ List process_matched_pairs_cpp(
     if (has_treatment) {
       reservoir_treat.conservativeResize(res_idx);
     }
+    reservoir_strata.conservativeResize(res_idx);
   }
   
   if (diff_idx > 0) {
@@ -155,14 +144,13 @@ List process_matched_pairs_cpp(
   }
 
   return List::create(
-    _["X_reservoir_concordant"] = res_idx > 0 ? wrap(reservoir_X) : R_NilValue,
-    _["y_reservoir_concordant"] = res_idx > 0 ? wrap(reservoir_y) : R_NilValue,
-    _["treatment_reservoir_concordant"] = (has_treatment && res_idx > 0) ? wrap(reservoir_treat) : R_NilValue,
+    _["X_concordant"] = res_idx > 0 ? wrap(reservoir_X) : R_NilValue,
+    _["y_concordant"] = res_idx > 0 ? wrap(reservoir_y) : R_NilValue,
+    _["treatment_concordant"] = (has_treatment && res_idx > 0) ? wrap(reservoir_treat) : R_NilValue,
+    _["strata_concordant"] = res_idx > 0 ? wrap(reservoir_strata) : R_NilValue,
     _["X_diffs_discordant"] = diff_idx > 0 ? wrap(diffs_X) : R_NilValue,
     _["y_diffs_discordant"] = diff_idx > 0 ? wrap(diffs_y) : R_NilValue,
     _["treatment_diffs_discordant"] = (has_treatment && diff_idx > 0) ? wrap(diffs_treat) : R_NilValue,
-    _["dropped_discordant"] = false,
-    _["dropped_reservoir_concordant"] = dropped_reservoir,
     _["discordant_idx"] = discordant_idx
   );
 }

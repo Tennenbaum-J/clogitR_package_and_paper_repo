@@ -15,7 +15,7 @@ Depends:
     Rcpp (>= 1.0.14),
     RcppEigen
 Imports:
-    R6,
+
     checkmate,
     data.table,
     doParallel,
